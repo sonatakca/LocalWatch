@@ -6,6 +6,7 @@ const ffmpegPath = require('ffmpeg-static');
 const ffprobePath = require('@ffprobe-installer/ffprobe').path;
 const ffmpeg = require('fluent-ffmpeg');
 const crypto = require('crypto');
+const os = require('os');
 if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
 if (ffprobePath) ffmpeg.setFfprobePath(ffprobePath);
 
@@ -1131,7 +1132,23 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`LocalWatch server running on http://localhost:${PORT}`);
+
+  try {
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        // Skip over non-IPv4 and internal (i.e. 127.0.0.1) addresses
+        if (net.family === 'IPv4' && !net.internal) {
+          console.log(`  On your network: http://${net.address}:${PORT}`);
+          break; // Show first non-internal IPv4 address
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Could not determine local network address.', e);
+  }
+
   console.log(`Drop videos in: ${path.resolve(VIDEO_DIR)}`);
 });
