@@ -138,11 +138,23 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   direction: rtl; /* move scrollbar to the left */
-  transition: opacity 220ms ease;
+  /* Smooth fade both ways; longer on expand with slight delay */
+  transition: opacity var(--sb-opacity-dur, 220ms) ease var(--sb-opacity-delay, 0ms);
   overscroll-behavior: contain;
+  opacity: 1;
 }
 .sidebar-inner > * { direction: ltr; }
-.layout.collapsed .sidebar-inner { opacity: 0; pointer-events: none; }
+.layout.collapsed .sidebar-inner {
+  opacity: 0;
+  pointer-events: none;
+  --sb-opacity-dur: 220ms; /* fast fade out */
+  --sb-opacity-delay: 0ms;
+}
+.layout:not(.collapsed) .sidebar-inner {
+  opacity: 1;
+  --sb-opacity-dur: 500ms;  /* match column expand */
+  --sb-opacity-delay: 120ms; /* start a touch after width begins expanding */
+}
 
 .collapse-btn {
   position: absolute;
@@ -328,6 +340,35 @@ html::-webkit-scrollbar-thumb { background-color: #2b2b2b; border-radius: 10px; 
 html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 
 /* Better looking sliders (exact min/max ends) */
+
+/* Skip Intro overlay */
+.lt-skip-intro {
+  position: absolute;
+  right: 16px;
+  bottom: 100px;
+  z-index: 3; /* above controls */
+  pointer-events: none;
+}
+.lt-skip-intro.show { pointer-events: auto; }
+.lt-skip-intro .btn {
+  background: rgba(50,50,50,0.4);
+  -webkit-backdrop-filter: blur(100px);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 999px;
+  padding: 16px 28px;
+  font-weight: 600;
+  font-size: 20px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  backdrop-filter: blur(6px);
+  transform: translateY(-6px);
+  opacity: 0;
+  transition: scale 0.2s ease, background 0.5s ease, opacity .25s ease, transform .25s ease;
+}
+.lt-skip-intro.show .btn { opacity: 1; transform: translateY(0); }
+.lt-skip-intro .btn:hover { background: rgba(50,50,50,0.85); border-color: rgba(255,255,255,0.28); scale: 1.08;-webkit-backdrop-filter: blur(100px); transition: all ease 200ms; }
+.plyr--fullscreen .lt-skip-intro { right: 24px; top: 24px; }
 .subs-tools input[type="range"] { 
   -webkit-appearance: none;
   appearance: none;

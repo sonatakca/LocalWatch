@@ -854,6 +854,82 @@ app.get('/subs', (req, res) => {
   res.json({ tracks });
 });
 
+// Skip-intro helpers
+function parseHhMmSs(str) {
+  if (!str) return null;
+  const s = String(str).trim();
+  const m = s.match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?$/);
+  if (!m) return null;
+  const hh = parseInt(m[1] || '0', 10) || 0;
+  const mm = parseInt(m[2] || '0', 10) || 0;
+  const ss = parseInt(m[3] || '0', 10) || 0;
+  const ms = parseInt(m[4] || '0', 10) || 0;
+  return hh * 3600 + mm * 60 + ss + (ms ? (ms / 1000) : 0);
+}
+
+function parseSkipIntroFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    let start = null, end = null;
+    raw.split(/\r?\n/).forEach((line) => {
+      const ln = line.trim();
+      if (!ln) return;
+      // Accept formats like: s -> 00:03  or  start: 00:03  or s=00:03
+      const m = ln.match(/^(s|start)\s*(?:->|:|=)?\s*([^#;]+)/i);
+      const n = ln.match(/^(e|end)\s*(?:->|:|=)?\s*([^#;]+)/i);
+      if (m) {
+        const v = parseHhMmSs(m[2].trim());
+        if (v != null) start = v;
+      }
+      if (n) {
+        const v = parseHhMmSs(n[2].trim());
+        if (v != null) end = v;
+      }
+    });
+    if (start != null && end != null && end > start) {
+      return { start, end };
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function findSkipIntroForVideo(filePath) {
+  try {
+    let dir = path.dirname(filePath);
+    const root = path.resolve(VIDEO_DIR);
+    while (dir && dir.length >= root.length) {
+      const cand = path.join(dir, '.skipintro');
+      if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+        const se = parseSkipIntroFile(cand);
+        if (se) return se;
+      }
+      if (dir === root) break;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {}
+  return null;
+}
+
+// Return skip-intro window for a given video
+// GET /skipintro?p=<relative video path>
+app.get('/skipintro', (req, res) => {
+  const relPath = req.query.p;
+  if (!relPath || typeof relPath !== 'string') {
+    return res.status(400).json({});
+  }
+  const filePath = resolveSafe(relPath);
+  if (!filePath || !fs.existsSync(filePath)) {
+    return res.status(404).json({});
+  }
+  const se = findSkipIntroForVideo(filePath);
+  if (!se) return res.json({});
+  return res.json({ start: se.start, end: se.end });
+});
+
 function shiftWebVtt(content, offsetMs) {
   if (!offsetMs) return content;
   const add = (ms) => {
@@ -965,6 +1041,6 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`LocalTube server running on http://localhost:${PORT}`);
+  console.log(`LocalWatch server running on http://localhost:${PORT}`);
   console.log(`Drop videos in: ${path.resolve(VIDEO_DIR)}`);
 });

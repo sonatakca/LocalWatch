@@ -36,6 +36,62 @@
     ],
   });
 
+  // Skip Intro UI state
+  let skipIntroWindow = null; // { start, end }
+  let skipBtnHost = null; // container appended inside plyr
+  let lastSkipVisible = false;
+
+  function ensureSkipIntroUI() {
+    try {
+      const container = player && player.elements && player.elements.container;
+      if (!container) return;
+      if (skipBtnHost && skipBtnHost.isConnected) return; // already added
+      const host = document.createElement('div');
+      host.className = 'lt-skip-intro';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn';
+      btn.textContent = 'Skip Intro';
+      btn.addEventListener('click', () => {
+        if (!skipIntroWindow) return;
+        try {
+          const t = Math.max(0, Number(skipIntroWindow.end) || 0);
+          player.currentTime = t + 0.01;
+          player.play();
+        } catch {}
+        setSkipBtnVisible(false);
+      });
+      host.appendChild(btn);
+      container.appendChild(host);
+      skipBtnHost = host;
+    } catch {}
+  }
+
+  function setSkipBtnVisible(show) {
+    if (!skipBtnHost) return;
+    lastSkipVisible = !!show;
+    skipBtnHost.classList.toggle('show', !!show);
+  }
+
+  async function fetchSkipIntro(relPath) {
+    try {
+      const r = await fetch(`/skipintro?p=${encodeURIComponent(relPath)}`);
+      if (!r.ok) return null;
+      const j = await r.json().catch(() => ({}));
+      if (j && typeof j.start === 'number' && typeof j.end === 'number' && j.end > j.start) {
+        return { start: j.start, end: j.end };
+      }
+    } catch {}
+    return null;
+  }
+
+  function updateSkipBtnVisibility(currentTime) {
+    if (!skipIntroWindow) { setSkipBtnVisible(false); return; }
+    const t = Number(currentTime) || 0;
+    const show = t >= skipIntroWindow.start && t < skipIntroWindow.end;
+    if (show !== lastSkipVisible) setSkipBtnVisible(show);
+  }
+
   // Subtitle tools live under the video (collapsible panel)
   const subsTools = document.querySelector('.subs-tools');
   const sdToggleBtn = document.getElementById('sd-toggle');
@@ -118,7 +174,16 @@
       settingsBtn.addEventListener('click', () => setTimeout(setupSettingsMenu, 0));
     }
     wireLiftForControls();
+    ensureSkipIntroUI();
   });
+
+  player.on('timeupdate', () => {
+    updateSkipBtnVisibility(player.currentTime || 0);
+  });
+  player.on('seeking', () => {
+    updateSkipBtnVisibility(player.currentTime || 0);
+  });
+  player.on('ended', () => setSkipBtnVisible(false));
 
   // Toggle button under the video
   if (sdToggleBtn) {
@@ -185,12 +250,12 @@
 
   function getSavedDelayMs(folder) {
     try {
-      const v = localStorage.getItem('localtube:subDelay:' + folder);
+      const v = localStorage.getItem('LocalWatch:subDelay:' + folder);
       return v != null ? parseInt(v, 10) || 0 : 0;
     } catch { return 0; }
   }
   function setSavedDelayMs(folder, ms) {
-    try { localStorage.setItem('localtube:subDelay:' + folder, String(ms)); } catch {}
+    try { localStorage.setItem('LocalWatch:subDelay:' + folder, String(ms)); } catch {}
   }
   function updateDelayUI(ms) {
     if (sdValue) sdValue.value = String(ms);
@@ -208,7 +273,7 @@
 
   function loadSubStyle() {
     try {
-      const j = JSON.parse(localStorage.getItem('localtube:subStyle') || '{}');
+      const j = JSON.parse(localStorage.getItem('LocalWatch:subStyle') || '{}');
       return {
         size: Number.isFinite(j.size) ? j.size : 100,
         bg: Number.isFinite(j.bg) ? j.bg : 0.35,
@@ -220,7 +285,7 @@
     } catch { return { size: 100, bg: 0.35, effect: 'shadow' }; }
   }
   function saveSubStyle(style) {
-    try { localStorage.setItem('localtube:subStyle', JSON.stringify(style)); } catch {}
+    try { localStorage.setItem('LocalWatch:subStyle', JSON.stringify(style)); } catch {}
   }
   function applySubStyle(style) {
     const root = document.documentElement;
@@ -317,10 +382,10 @@
     if (!layoutEl || !sidebarEl) return;
     layoutEl.classList.toggle('collapsed', collapsed);
     sidebarEl.classList.toggle('collapsed', collapsed);
-    try { localStorage.setItem('localtube:sidebarCollapsed', collapsed ? '1' : '0'); } catch {}
+    try { localStorage.setItem('LocalWatch:sidebarCollapsed', collapsed ? '1' : '0'); } catch {}
   }
   function getSidebarCollapsed() {
-    try { return localStorage.getItem('localtube:sidebarCollapsed') === '1'; } catch { return false; }
+    try { return localStorage.getItem('LocalWatch:sidebarCollapsed') === '1'; } catch { return false; }
   }
   if (collapseBtn) {
     collapseBtn.addEventListener('click', () => {
@@ -445,7 +510,12 @@
     nowMeta.textContent = `${item.ext.replace('.', '').toUpperCase()} • ${bytesToSize(item.size)}${durStr}`;
     highlightActive();
     currentRelPath = item.relPath;
-    try { localStorage.setItem('localtube:last', item.relPath); } catch {}
+    try { localStorage.setItem('LocalWatch:last', item.relPath); } catch {}
+
+    // Fetch skip-intro window for this item and initialize UI
+    ensureSkipIntroUI();
+    skipIntroWindow = await fetchSkipIntro(item.relPath);
+    updateSkipBtnVisibility(0);
 
     // If the browser fails to play remuxed/copy output (e.g. it
     // can't decode HEVC), automatically retry forcing a transcode.
@@ -546,7 +616,7 @@
 
     // Restore last played if available
     let restored = null;
-    try { restored = localStorage.getItem('localtube:last'); } catch {}
+    try { restored = localStorage.getItem('LocalWatch:last'); } catch {}
     if (restored) {
       const idx = filtered.findIndex(v => v.relPath === restored);
       if (idx !== -1) {
