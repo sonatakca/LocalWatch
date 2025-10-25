@@ -46,6 +46,10 @@
   let nextEpAt = null; // seconds from start when to show
   let nextBtnHost = null;
   let lastNextVisible = false;
+  let nextBtnEl = null;
+  let nextAutoSkipTimer = null;
+  let nextAutoSkipSuppressed = false; // once user interacts, don't auto-skip until next appearance
+  let nextAutoSkipCancelHandlers = [];
 
   // Resume playback state (localStorage)
   let lastResumeSaveTs = 0;
@@ -126,6 +130,7 @@
       host.appendChild(btn);
       container.appendChild(host);
       nextBtnHost = host;
+      nextBtnEl = btn;
     } catch {}
   }
 
@@ -133,6 +138,14 @@
     if (!nextBtnHost) return;
     lastNextVisible = !!show;
     nextBtnHost.classList.toggle('show', !!show);
+    // Manage auto-skip lifecycle tied to visibility
+    if (show) {
+      // Start countdown only if not previously suppressed by user activity
+      if (!nextAutoSkipSuppressed) startNextAutoSkipCountdown(5000);
+    } else {
+      // Hide: clear any pending timers and reset suppression for next time
+      clearNextAutoSkip(true /*resetSuppression*/);
+    }
   }
 
   async function fetchSkipIntro(relPath) {
@@ -178,6 +191,62 @@
     // Show once we reach trigger time; keep visible until end
     const show = t >= nextEpAt && (activeIndex < filtered.length);
     if (show !== lastNextVisible) setNextBtnVisible(show);
+  }
+
+  function clearNextAutoSkip(resetSuppression) {
+    try { if (nextAutoSkipTimer) { clearTimeout(nextAutoSkipTimer); } } catch {}
+    nextAutoSkipTimer = null;
+    if (nextBtnEl) {
+      nextBtnEl.removeAttribute('data-auto-skip');
+      try { nextBtnEl.style.removeProperty('--auto-skip-duration'); } catch {}
+    }
+    // Remove temporary cancel handlers
+    nextAutoSkipCancelHandlers.forEach(({ t, fn, opts }) => {
+      try { window.removeEventListener(t, fn, opts); } catch {}
+    });
+    nextAutoSkipCancelHandlers = [];
+    if (resetSuppression) nextAutoSkipSuppressed = false;
+  }
+
+  function startNextAutoSkipCountdown(ms) {
+    clearNextAutoSkip(false);
+    if (!nextBtnEl) return;
+    // Mark running to enable CSS indicator
+    nextBtnEl.setAttribute('data-auto-skip', 'running');
+    try { nextBtnEl.style.setProperty('--auto-skip-duration', `${Math.max(0, ms|0)}ms`); } catch {}
+
+    // Cancel on any user activity (mouse, key, touch, wheel)
+    const cancel = () => {
+      nextAutoSkipSuppressed = true;
+      clearNextAutoSkip(false);
+    };
+    const addCancel = (t, opts) => {
+      const fn = () => cancel();
+      window.addEventListener(t, fn, opts);
+      nextAutoSkipCancelHandlers.push({ t, fn, opts });
+    };
+    addCancel('mousemove', { passive: true });
+    addCancel('pointermove', { passive: true });
+    addCancel('mousedown', { passive: true });
+    addCancel('pointerdown', { passive: true });
+    addCancel('keydown', false);
+    addCancel('wheel', { passive: true });
+    addCancel('touchstart', { passive: true });
+    addCancel('touchmove', { passive: true });
+
+    // After delay, if still visible and not suppressed, go to next episode
+    nextAutoSkipTimer = setTimeout(() => {
+      nextAutoSkipTimer = null;
+      // Only proceed if button still visible and countdown hasn't been cancelled
+      if (!lastNextVisible || nextAutoSkipSuppressed) { clearNextAutoSkip(false); return; }
+      try {
+        if (activeIndex >= 0 && activeIndex < filtered.length - 1) {
+          playIndex(activeIndex + 1);
+        }
+      } catch {}
+      clearNextAutoSkip(true);
+      setNextBtnVisible(false);
+    }, Math.max(0, ms|0));
   }
 
   // Subtitle tools live under the video (collapsible panel)
