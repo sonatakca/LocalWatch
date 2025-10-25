@@ -86,7 +86,329 @@ function resolveSafe(relativePath) {
 
 ensureVideoDir();
 
+// Shared file helpers
+function ensureParentDir(p) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+}
+
+function copyFileSyncBuffered(src, dest) {
+  ensureParentDir(dest);
+  const BUF_SIZE = 64 * 1024;
+  const buf = Buffer.allocUnsafe(BUF_SIZE);
+  const srcFd = fs.openSync(src, 'r');
+  const destFd = fs.openSync(dest, 'w');
+  try {
+    let bytesRead = 0;
+    do {
+      bytesRead = fs.readSync(srcFd, buf, 0, BUF_SIZE, null);
+      if (bytesRead > 0) fs.writeSync(destFd, buf, 0, bytesRead);
+    } while (bytesRead > 0);
+  } finally {
+    try { fs.closeSync(srcFd); } catch {}
+    try { fs.closeSync(destFd); } catch {}
+  }
+}
+
+function copyDirRecursive(srcDir, destDir) {
+  const st = fs.statSync(srcDir);
+  if (!st.isDirectory()) throw new Error('Source is not a directory');
+  fs.mkdirSync(destDir, { recursive: true });
+  const entries = fs.readdirSync(srcDir, { withFileTypes: true });
+  for (const de of entries) {
+    const s = path.join(srcDir, de.name);
+    const d = path.join(destDir, de.name);
+    if (de.isDirectory()) copyDirRecursive(s, d);
+    else if (de.isFile()) copyFileSyncBuffered(s, d);
+    else if (de.isSymbolicLink()) {
+      const target = fs.readlinkSync(s);
+      fs.symlinkSync(target, d);
+    }
+  }
+}
+
+function movePathSync(src, dest) {
+  // Fast path
+  try {
+    ensureParentDir(dest);
+    fs.renameSync(src, dest);
+    return true;
+  } catch (e) {
+    // Cross-device or locked; fallback to copy+delete
+    if (e && e.code !== 'EXDEV' && e.code !== 'EPERM' && e.code !== 'EACCES' && e.code !== 'BUSY') {
+      throw e;
+    }
+    const st = fs.statSync(src);
+    ensureParentDir(dest);
+    if (st.isDirectory()) {
+      if (fs.existsSync(dest)) throw new Error('Destination exists');
+      if (fs.cpSync) fs.cpSync(src, dest, { recursive: true });
+      else copyDirRecursive(src, dest);
+      fs.rmSync(src, { recursive: true, force: true });
+      return true;
+    } else {
+      copyFileSyncBuffered(src, dest);
+      const dstSt = fs.statSync(dest);
+      if (dstSt.size !== st.size) {
+        try { fs.unlinkSync(dest); } catch {}
+        throw new Error('copy-verify-failed');
+      }
+      fs.unlinkSync(src);
+      return true;
+    }
+  }
+}
+
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Accept raw uploads streamed to disk inside VIDEO_DIR.
+// Usage: POST /upload?p=<relative/path/in/media>
+// Body: file content (any type). Creates parent folders as needed.
+app.post('/upload', (req, res) => {
+  try {
+    const rel = req.query.p;
+    if (!rel || typeof rel !== 'string') {
+      return res.status(400).send('Missing destination path');
+    }
+    // Normalize separators and strip leading slashes
+    const safeRel = rel.replace(/\\+/g, '/').replace(/^\/+/, '');
+    const dest = resolveSafe(safeRel);
+    if (!dest) return res.status(400).send('Bad destination path');
+
+    // Ensure parent exists
+    const dir = path.dirname(dest);
+    fs.mkdirSync(dir, { recursive: true });
+
+    // Ensure top-level folder is marked included
+    try {
+      const top = safeRel.includes('/') ? safeRel.split('/')[0] : '';
+      const markerDir = top ? path.join(VIDEO_DIR, top) : VIDEO_DIR;
+      const markerPath = path.join(markerDir, INCLUDE_MARKER);
+      if (!fs.existsSync(markerPath)) {
+        fs.writeFileSync(markerPath, '', { flag: 'wx' });
+      }
+    } catch {}
+
+    // Stream request body into the destination file
+    const expectedSize = parseInt(req.headers['x-file-size'] || '0', 10) || 0;
+    let received = 0;
+    req.on('data', (chunk) => { received += chunk.length; });
+    const out = fs.createWriteStream(dest);
+    let finished = false;
+    const done = (code, msg) => {
+      if (finished) return;
+      finished = true;
+      try { out.destroy(); } catch {}
+      if (code === 200) {
+        try {
+          const st = fs.statSync(dest);
+          if (expectedSize && st.size !== expectedSize) {
+            try { fs.unlinkSync(dest); } catch {}
+            return res.status(400).json({ ok: false, error: 'size-mismatch' });
+          }
+        } catch (e) {
+          return res.status(500).json({ ok: false, error: 'stat-failed' });
+        }
+        res.json({ ok: true, rel: safeRel, bytes: received });
+      } else {
+        res.status(code).end(msg || 'Upload error');
+      }
+    };
+
+    req.on('aborted', () => {
+      try { out.destroy(); } catch {}
+      try { fs.unlinkSync(dest); } catch {}
+    });
+    out.on('error', (err) => {
+      console.error('Upload write error:', err);
+      done(500, 'Write failed');
+    });
+    out.on('finish', () => done(200));
+
+    req.pipe(out);
+  } catch (e) {
+    console.error('Upload exception:', e);
+    res.status(500).end('Upload failed');
+  }
+});
+
+// Move local files or directories into VIDEO_DIR.
+// Usage: POST /ingest_local  with JSON: { items: [ { src: string, destRel?: string } ] }
+// - src can be an absolute path (C:\\... or /path) or a file:// URI
+// - destRel is the destination path relative to VIDEO_DIR (defaults to basename of src)
+// Notes: This is intended for local-only use. It will attempt a fast rename and
+//        falls back to copy+delete across devices when needed.
+app.post('/ingest_local', express.json({ limit: '2mb' }), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (!items.length) return res.status(400).json({ ok: false, error: 'No items' });
+
+    function parseSrc(any) {
+      if (!any || typeof any !== 'string') return null;
+      try {
+        if (/^file:/i.test(any)) {
+          const u = new URL(any);
+          if (u.protocol !== 'file:') return null;
+          let p = u.pathname || '';
+          // Decode percent-encoding
+          p = decodeURIComponent(p);
+          if (process.platform === 'win32') {
+            // file:///C:/path -> C:\path
+            if (/^\/[a-zA-Z]:\//.test(p)) p = p.slice(1);
+            p = p.replace(/\//g, '\\');
+          }
+          return p;
+        }
+      } catch {}
+      return any;
+    }
+
+    function resolveDestRel(rel) {
+      if (!rel || typeof rel !== 'string') return null;
+      // Normalize separators, strip leading slashes and dots
+      const safeRel = rel.replace(/\\+/g, '/').replace(/^\/+/, '').replace(/^\.\/+/, '');
+      return safeRel;
+    }
+
+    function destAbsFor(rel) {
+      const safe = resolveDestRel(rel);
+      const abs = safe && resolveSafe(safe);
+      return abs;
+    }
+
+    // use shared helpers: ensureParentDir, movePathSync, copy* above
+
+    const moved = [];
+    for (const it of items) {
+      const srcAny = it && it.src;
+      let src = parseSrc(srcAny);
+      if (!src) throw new Error('Bad src');
+      // Normalize src to absolute path
+      if (!path.isAbsolute(src)) {
+        // If relative, resolve from process cwd
+        src = path.resolve(process.cwd(), src);
+      }
+      if (!fs.existsSync(src)) throw new Error(`Source not found: ${src}`);
+      const st = fs.statSync(src);
+
+      // Determine destination relative path
+      let destRel = resolveDestRel(it && it.destRel);
+      if (!destRel) {
+        const base = path.basename(src);
+        destRel = base;
+      }
+      const destAbs = destAbsFor(destRel);
+      if (!destAbs) throw new Error('Bad destination');
+
+      // Ensure destination does not escape VIDEO_DIR
+      if (!destAbs.startsWith(path.resolve(VIDEO_DIR))) {
+        throw new Error('Unsafe destination');
+      }
+      // If dest exists: allow overwrite for files, but avoid destructive
+      // merges for directories (error out for directories).
+      if (fs.existsSync(destAbs)) {
+        const dstSt = fs.statSync(destAbs);
+        const srcIsDir = st.isDirectory();
+        const dstIsDir = dstSt.isDirectory();
+        if (srcIsDir) {
+          // Avoid deleting an existing directory tree implicitly
+          throw new Error(`Destination exists: ${destRel}`);
+        } else {
+          if (dstIsDir) throw new Error(`Destination exists: ${destRel}`);
+          try { fs.unlinkSync(destAbs); } catch (e) {}
+        }
+      }
+
+      movePathSync(src, destAbs);
+      moved.push({ src, destRel, isDir: st.isDirectory() });
+    }
+
+    return res.json({ ok: true, moved });
+  } catch (e) {
+    console.error('ingest_local error:', e);
+    const msg = (e && e.message) || 'ingest_local failed';
+    return res.status(400).json({ ok: false, error: msg });
+  }
+});
+
+// Try to find dropped items inside the user's Downloads and move them.
+// Usage: POST /ingest_from_downloads { items: [ { name, size, mtime?, destRel? } ] }
+// Notes: Recursively searches Downloads (depth-limited) for a unique match by name+size
+//        (mtime within tolerance if provided). Moves matching items into VIDEO_DIR.
+app.post('/ingest_from_downloads', express.json({ limit: '2mb' }), async (req, res) => {
+  try {
+    const items = (req.body && Array.isArray(req.body.items)) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ ok: false, error: 'No items' });
+
+    const dlDir = getDownloadsDir();
+    if (!dlDir || !fs.existsSync(dlDir)) return res.status(400).json({ ok: false, error: 'Downloads not found' });
+
+    const moved = [];
+    const unresolved = [];
+    for (const it of items) {
+      const name = it && it.name;
+      const size = it && Number(it.size);
+      const mtimeHint = it && Number(it.mtime);
+      let destRel = (it && it.destRel) || name;
+      if (!name || !size || !destRel) { unresolved.push({ name, reason: 'bad-item' }); continue; }
+      const src = findInDownloads(dlDir, name, size, mtimeHint);
+      if (!src) { unresolved.push({ name, reason: 'not-found' }); continue; }
+      const destAbs = resolveSafe(destRel.replace(/\\+/g, '/'));
+      if (!destAbs) { unresolved.push({ name, reason: 'bad-dest' }); continue; }
+      // If destination exists, use same overwrite rule as ingest_local (files overwrite, dirs error)
+      if (fs.existsSync(destAbs)) {
+        const stSrc = fs.statSync(src);
+        const stDst = fs.statSync(destAbs);
+        if (stSrc.isDirectory()) { unresolved.push({ name, reason: 'dest-exists' }); continue; }
+        if (stDst.isDirectory()) { unresolved.push({ name, reason: 'dest-exists' }); continue; }
+        try { fs.unlinkSync(destAbs); } catch {}
+      }
+      movePathSync(src, destAbs);
+      moved.push({ name, size, destRel, src });
+    }
+    return res.json({ ok: true, moved, unresolved });
+  } catch (e) {
+    console.error('ingest_from_downloads error:', e);
+    return res.status(500).json({ ok: false, error: 'ingest_from_downloads failed' });
+  }
+
+
+  function getDownloadsDir() {
+    const home = process.env.USERPROFILE || process.env.HOME || require('os').homedir();
+    if (!home) return null;
+    const cand = path.join(home, 'Downloads');
+    return cand;
+  }
+
+  function findInDownloads(base, name, size, mtime) {
+    const maxDepth = 3;
+    function walk(dir, depth) {
+      if (depth > maxDepth) return null;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+      for (const de of entries) {
+        const full = path.join(dir, de.name);
+        if (de.isDirectory()) {
+          const sub = walk(full, depth + 1);
+          if (sub) return sub;
+        } else if (de.isFile() && de.name === name) {
+          try {
+            const st = fs.statSync(full);
+            if (Number(st.size) === Number(size)) {
+              if (mtime) {
+                const delta = Math.abs(Number(st.mtimeMs || 0) - Number(mtime));
+                if (delta > 15000) continue; // 15s tolerance
+              }
+              return full;
+            }
+          } catch {}
+        }
+      }
+      return null;
+    }
+    return walk(base, 0);
+  }
+});
 
 app.get('/api/videos', async (req, res) => {
   try {

@@ -91,6 +91,29 @@ body {
 .search-wrap input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px #1a3b52; }
 
 .dir-info { color: var(--muted); font-size: 12px; }
+.dropzone {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 200px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px dashed #3a3a3a;
+  border-radius: 8px;
+  background: #141414;
+  color: #d4d4d4;
+  font-size: 12px;
+  user-select: none;
+}
+.dropzone.dragover {
+  border-color: var(--accent);
+  color: #e5f0ff;
+  background: #18202b;
+}
+.dropzone.uploading::after {
+  content: ' Uploading...';
+  color: var(--accent);
+}
 
 .layout {
   display: grid;

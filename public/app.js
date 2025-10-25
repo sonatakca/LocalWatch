@@ -8,7 +8,7 @@
   const collapseBtn = document.getElementById('collapse-btn');
   const countEl = $('#video-count');
   const emptyHint = $('#empty-hint');
-  const dirInfo = $('#dir-info');
+  const dropzone = document.getElementById('dropzone');
   const searchEl = $('#search');
   const catBar = $('#cat-bar');
   const nowTitle = $('#now-title');
@@ -522,7 +522,7 @@
   async function load() {
     const res = await fetch('/api/videos');
     const data = await res.json();
-    dirInfo.textContent = data.directory;
+    // We no longer show the media path; dropzone replaces it.
     videos = (data.items || []).map((v) => {
       // Derive category client-side if missing
       if (!v.category && v.relPath && v.relPath.includes('/')) {
@@ -603,4 +603,184 @@
 
   // Initialize subtitle appearance controls on startup
   initSubStyleUI();
+
+  // Drag & drop uploader for adding files/folders into /media
+  if (dropzone) {
+    const onDragOver = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.add('dragover');
+    };
+    const onDragLeave = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove('dragover');
+    };
+    dropzone.addEventListener('dragover', onDragOver);
+    dropzone.addEventListener('dragenter', onDragOver);
+    dropzone.addEventListener('dragleave', onDragLeave);
+    dropzone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove('dragover');
+      if (!e.dataTransfer) return;
+
+      dropzone.classList.add('uploading');
+      try {
+        // Prefer moving files/folders via local file:// URIs if available
+        const localItems = extractLocalDropItems(e.dataTransfer);
+        if (localItems && localItems.length) {
+          await moveLocalItems(localItems);
+        } else {
+          const files = await collectDroppedFiles(e.dataTransfer);
+          // Try to move from Downloads by matching name+size first
+          const movedKeys = await guessAndMoveFromDownloads(files);
+          // Upload any that were not moved
+          const notMoved = [];
+          for (const f of files) {
+            const key = `${f.file.name}|${f.file.size||0}`;
+            if (movedKeys.has(key)) continue;
+            await uploadOne(f.file, f.relPath);
+            notMoved.push(f);
+          }
+          // After upload, make a best-effort to delete originals in Downloads
+          if (notMoved.length) await guessAndMoveFromDownloads(notMoved);
+        }
+        // Refresh list after upload
+        await load();
+      } catch (err) {
+        console.error('Upload failed:', err);
+      } finally {
+        dropzone.classList.remove('uploading');
+      }
+    });
+  }
+
+  async function uploadOne(file, relPath) {
+    // Ensure forward slashes in relPath
+    relPath = (relPath || file.name).replace(/\\+/g, '/');
+    const url = `/upload?p=${encodeURIComponent(relPath)}`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Filename': encodeURIComponent(file.name),
+        'X-File-Size': String(file.size || 0),
+      },
+      body: file,
+    });
+    if (!r.ok) {
+      const txt = await r.text().catch(() => String(r.status));
+      throw new Error(`Upload failed for ${relPath}: ${r.status} ${txt}`);
+    }
+    return r.json().catch(() => ({}));
+  }
+
+  async function collectDroppedFiles(dt) {
+    // Prefer FileSystemEntry API for directories
+    if (dt.items && dt.items.length && typeof dt.items[0].webkitGetAsEntry === 'function') {
+      const entries = Array.from(dt.items).map((it) => it.webkitGetAsEntry()).filter(Boolean);
+      const out = [];
+      async function walkEntry(entry, prefix) {
+        prefix = prefix || '';
+        if (entry.isFile) {
+          await new Promise((resolve, reject) => {
+            entry.file((file) => {
+              out.push({ file, relPath: prefix + file.name });
+              resolve();
+            }, reject);
+          });
+        } else if (entry.isDirectory) {
+          const dirReader = entry.createReader();
+          let batch = [];
+          // readEntries may return in chunks; loop until empty
+          do {
+            batch = await new Promise((resolve, reject) => {
+              dirReader.readEntries(resolve, reject);
+            });
+            for (const ent of batch) {
+              await walkEntry(ent, prefix + entry.name + '/');
+            }
+          } while (batch.length > 0);
+        }
+      }
+      for (const en of entries) {
+        const base = en.isDirectory ? (en.name ? en.name + '/' : '') : '';
+        await walkEntry(en, en.isDirectory ? '' : '');
+        // Note: walkEntry already prefixes directory names as it descends
+      }
+      return out;
+    }
+    // Fallback: plain files list (no directory structure)
+    const files = Array.from(dt.files || []);
+    return files.map((file) => ({ file, relPath: file.webkitRelativePath || file.name }));
+  }
+
+  function extractLocalDropItems(dt) {
+    try {
+      const all = [];
+      try {
+        const u = dt.getData('text/uri-list');
+        if (u) all.push(...u.split(/\r?\n/));
+      } catch {}
+      try {
+        const t = dt.getData('text/plain');
+        if (t) all.push(...t.split(/\r?\n/));
+      } catch {}
+      const uris = all
+        .map(s => (s || '').trim())
+        .filter(s => /^file:/i.test(s));
+      if (!uris.length) return [];
+      const items = uris.map((uri) => {
+        // destRel defaults to the basename of the path
+        const destRel = decodeURIComponent(uri.replace(/^file:\/\//i, ''))
+          .replace(/\\+/g, '/').replace(/^\/+/, '')
+          .split('/')
+          .filter(Boolean)
+          .slice(-1)[0] || '';
+        return { src: uri, destRel };
+      }).filter(it => it.destRel);
+      return items;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function moveLocalItems(items) {
+    const r = await fetch('/ingest_local', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    if (!r.ok) {
+      const txt = await r.text().catch(() => String(r.status));
+      throw new Error(`Move failed: ${r.status} ${txt}`);
+    }
+    return r.json().catch(() => ({}));
+  }
+
+  async function guessAndMoveFromDownloads(files) {
+    try {
+      if (!files || !files.length) return new Set();
+      const payload = {
+        items: files.map(({ file, relPath }) => ({
+          name: file.name,
+          size: file.size || 0,
+          mtime: file.lastModified || 0,
+          destRel: (relPath || file.name).replace(/\\+/g, '/'),
+        })),
+      };
+      const r = await fetch('/ingest_from_downloads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) return new Set();
+      const data = await r.json().catch(() => ({}));
+      const moved = new Set((data && data.moved ? data.moved : []).map(x => `${x.name}|${x.size||0}`));
+      return moved;
+    } catch (e) {
+      return new Set();
+    }
+  }
 })();
