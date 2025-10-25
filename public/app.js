@@ -9,6 +9,7 @@
   const countEl = $('#video-count');
   const emptyHint = $('#empty-hint');
   const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('file-input');
   const searchEl = $('#search');
   const catBar = $('#cat-bar');
   const nowTitle = $('#now-title');
@@ -36,6 +37,8 @@
       'play-large', 'rewind', 'play', 'fast-forward', 'progress', 'current-time', 'duration', 'mute', 'volume', 'settings', 'pip', 'airplay', 'fullscreen'
     ],
   });
+
+  const isTouchEnv = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
   // Skip Intro UI state
   let skipIntroWindow = null; // { start, end }
@@ -334,6 +337,7 @@
     ensureSkipIntroUI();
     ensureNextEpisodeUI();
     try { applyCustomSeekIcons(); } catch {}
+    try { ensureTapGestures(); } catch {}
   });
 
   // Replace Plyr's default rewind/forward icons with custom SVGs
@@ -955,6 +959,16 @@
 
   // Drag & drop uploader for adding files/folders into /media
   if (dropzone) {
+    // Support tap-to-upload for touch devices and desktops
+    dropzone.addEventListener('click', (e) => {
+      // Avoid triggering when an actual drag operation is in progress
+      if (dropzone.classList.contains('uploading')) return;
+      if (fileInput) {
+        try { fileInput.value = ''; } catch {}
+        fileInput.click();
+      }
+    });
+
     const onDragOver = (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -1003,6 +1017,111 @@
         dropzone.classList.remove('uploading');
       }
     });
+  }
+
+  // Handle file picker fallback
+  if (fileInput) {
+    fileInput.addEventListener('change', async () => {
+      const files = Array.from(fileInput.files || []);
+      if (!files.length) return;
+      dropzone && dropzone.classList.add('uploading');
+      try {
+        // Keep directory structure when available
+        for (const file of files) {
+          const relPath = (file.webkitRelativePath && file.webkitRelativePath.length)
+            ? file.webkitRelativePath
+            : file.name;
+          await uploadOne(file, relPath);
+        }
+        await load();
+      } catch (err) {
+        console.error('Upload (picker) failed:', err);
+      } finally {
+        dropzone && dropzone.classList.remove('uploading');
+      }
+    });
+  }
+
+  // Touch-friendly gestures: double-tap left/right to seek ±seekTime
+  function ensureTapGestures() {
+    const container = document.querySelector('.player-container');
+    if (!container || container.dataset.lwTapWired === '1') return;
+    container.dataset.lwTapWired = '1';
+
+    // Feedback overlay host
+    const fbHost = document.createElement('div');
+    fbHost.className = 'lw-tap-feedback';
+    container.appendChild(fbHost);
+
+    let lastTapTime = 0;
+    let lastX = 0, lastY = 0;
+    let lastPointerType = '';
+
+    const seekDelta = Math.max(1, Number(player && player.config && player.config.seekTime) || 10);
+
+    function showFeedback(x, y, text) {
+      const pulse = document.createElement('div');
+      pulse.className = 'pulse';
+      pulse.style.left = `${x}px`;
+      pulse.style.top = `${y}px`;
+      const label = document.createElement('div');
+      label.className = 'label';
+      label.style.left = `${x}px`;
+      label.style.top = `${y - 56}px`;
+      label.textContent = text;
+      fbHost.appendChild(pulse);
+      fbHost.appendChild(label);
+      // Animate out
+      requestAnimationFrame(() => { pulse.classList.add('fade'); });
+      setTimeout(() => { try { pulse.remove(); label.remove(); } catch {} }, 500);
+    }
+
+    function onPointerUp(e) {
+      // Ignore interactions on controls
+      if (e.target && (e.target.closest('.plyr__controls') || e.target.closest('.plyr__control'))) return;
+      const type = (e.pointerType || (e.changedTouches ? 'touch' : '')) || '';
+      const now = Date.now();
+      const rect = container.getBoundingClientRect();
+      let cx, cy;
+      if (e.changedTouches && e.changedTouches.length) {
+        cx = e.changedTouches[0].clientX; cy = e.changedTouches[0].clientY;
+      } else {
+        cx = e.clientX; cy = e.clientY;
+      }
+      const x = cx - rect.left;
+      const y = cy - rect.top;
+
+      const within = now - lastTapTime;
+      const dist = Math.hypot(x - lastX, y - lastY);
+      const isDouble = within > 0 && within < 300 && dist < 80 && (lastPointerType === type || !lastPointerType);
+
+      if (isDouble) {
+        e.preventDefault();
+        e.stopPropagation();
+        const wasPlaying = !(player && player.paused);
+        const frac = x / Math.max(1, rect.width);
+        const isRight = frac >= 0.5;
+        try {
+          const cur = Number(player.currentTime || 0);
+          const next = Math.max(0, cur + (isRight ? +seekDelta : -seekDelta));
+          player.currentTime = next;
+          if (wasPlaying) { try { player.play(); } catch {} }
+        } catch {}
+        showFeedback(cx - rect.left, cy - rect.top, (isRight ? '+' : '−') + seekDelta + 's');
+        lastTapTime = 0; // reset sequence
+        return;
+      }
+
+      lastTapTime = now;
+      lastX = x; lastY = y; lastPointerType = type;
+    }
+
+    // Prefer PointerEvents; fall back to touchend where PointerEvents unsupported
+    if (window.PointerEvent) {
+      container.addEventListener('pointerup', onPointerUp, { passive: false });
+    } else {
+      container.addEventListener('touchend', onPointerUp, { passive: false });
+    }
   }
 
   async function uploadOne(file, relPath) {

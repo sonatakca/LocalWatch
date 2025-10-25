@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>LocalWatch</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.css" />
@@ -17,7 +17,8 @@
       </div>
       <div class="dir-info">
         <div id="dropzone" class="dropzone" title="Drop files or folders here">
-          Drop to add to media
+          Drop to add to media · Tap to pick
+          <input id="file-input" type="file" multiple webkitdirectory directory style="display:none" />
         </div>
       </div>
     </header>

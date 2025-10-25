@@ -51,6 +51,11 @@
 }
 
 * { box-sizing: border-box; }
+/* Reduce tap highlight and improve touch defaults on mobile Safari/Edge */
+button, .chip, .card, .dropzone, input, select, video {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
 html, body { height: 100%; overflow: auto; }
 body {
   margin: 0;
@@ -142,6 +147,7 @@ body {
   transition: opacity var(--sb-opacity-dur, 220ms) ease var(--sb-opacity-delay, 0ms);
   overscroll-behavior: contain;
   opacity: 1;
+  -webkit-overflow-scrolling: touch; /* momentum scroll on iOS */
 }
 .sidebar-inner > * { direction: ltr; }
 .layout.collapsed .sidebar-inner {
@@ -188,7 +194,8 @@ body {
 .video-list { padding: 12px; display: grid; gap: 10px; }
 
 .cat-bar { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); overflow:auto; }
-.chip { padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; background: #141414; color: var(--text); cursor: pointer; white-space: nowrap; font-size: 12px; }
+.cat-bar { -webkit-overflow-scrolling: touch; }
+.chip { padding: 8px 12px; border: 1px solid var(--border); border-radius: 999px; background: #141414; color: var(--text); cursor: pointer; white-space: nowrap; font-size: 13px; }
 .chip:hover { border-color: #3a3a3a; }
 .chip.active { background: #1d2836; border-color: #2c4a63; color: #dbeafe; }
 
@@ -259,6 +266,8 @@ body {
   aspect-ratio: 16 / 9;
   width: 100%;
   max-height: calc(100vh - 160px);
+  /* Allow vertical page scroll while reserving horizontal swipe for player */
+  touch-action: pan-y;
 }
 .player-container .plyr { position: absolute; inset: 0; width: 100%; height: 100%; }
 .player-container video { width: 100%; height: 100%; }
@@ -402,6 +411,35 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   transform: scaleX(1);
   animation: lw-auto-decay var(--auto-skip-duration, 5000ms) linear forwards;
   z-index: 0; /* behind label/content */
+}
+/* Double-tap feedback overlay */
+.lw-tap-feedback {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4; /* above skip/next but below menus */
+}
+.lw-tap-feedback .pulse {
+  position: absolute;
+  width: 120px; height: 120px;
+  margin-left: -60px; margin-top: -60px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(62,166,255,0.35) 0%, rgba(62,166,255,0.18) 60%, rgba(62,166,255,0.0) 70%);
+  transform: scale(0.6);
+  opacity: 0.9;
+  transition: transform 450ms ease, opacity 450ms ease;
+}
+.lw-tap-feedback .pulse.fade {
+  transform: scale(1.2);
+  opacity: 0;
+}
+.lw-tap-feedback .label {
+  position: absolute;
+  color: #eaf5ff;
+  font-weight: 700;
+  text-shadow: 0 2px 8px rgba(0,0,0,.8);
+  transform: translate(-50%, -50%);
+  user-select: none;
 }
 .subs-tools input[type="range"] { 
   -webkit-appearance: none;
