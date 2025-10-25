@@ -41,6 +41,36 @@
   let skipBtnHost = null; // container appended inside plyr
   let lastSkipVisible = false;
 
+  // Next Episode UI state
+  let nextEpAt = null; // seconds from start when to show
+  let nextBtnHost = null;
+  let lastNextVisible = false;
+
+  // Resume playback state (localStorage)
+  let lastResumeSaveTs = 0;
+  function resumeKey(relPath) { return `LocalWatch:resume:${relPath}`; }
+  function loadResume(relPath) {
+    try {
+      const raw = localStorage.getItem(resumeKey(relPath));
+      if (!raw) return null;
+      const j = JSON.parse(raw);
+      if (j && typeof j.t === 'number' && j.t >= 0) return j;
+    } catch {}
+    return null;
+  }
+  function saveResume(relPath, t, dur) {
+    try {
+      const data = { t: Math.max(0, Math.floor(t)), dur: dur || null, ts: Date.now() };
+      localStorage.setItem(resumeKey(relPath), JSON.stringify(data));
+    } catch {}
+  }
+  function clearResume(relPath) { try { localStorage.removeItem(resumeKey(relPath)); } catch {} }
+  function approxDuration() {
+    const d = Number(player && player.duration) || Number(videoEl && videoEl.duration) || 0;
+    if (d && Number.isFinite(d) && d > 0) return d;
+    return (currentItem && Number(currentItem.duration)) || 0;
+  }
+
   function ensureSkipIntroUI() {
     try {
       const container = player && player.elements && player.elements.container;
@@ -73,6 +103,37 @@
     skipBtnHost.classList.toggle('show', !!show);
   }
 
+  function ensureNextEpisodeUI() {
+    try {
+      const container = player && player.elements && player.elements.container;
+      if (!container) return;
+      if (nextBtnHost && nextBtnHost.isConnected) return; // already added
+      const host = document.createElement('div');
+      host.className = 'lt-next-episode';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn';
+      btn.textContent = 'Next Episode';
+      btn.addEventListener('click', () => {
+        try {
+          if (activeIndex >= 0 && activeIndex < filtered.length - 1) {
+            playIndex(activeIndex + 1);
+          }
+        } catch {}
+        setNextBtnVisible(false);
+      });
+      host.appendChild(btn);
+      container.appendChild(host);
+      nextBtnHost = host;
+    } catch {}
+  }
+
+  function setNextBtnVisible(show) {
+    if (!nextBtnHost) return;
+    lastNextVisible = !!show;
+    nextBtnHost.classList.toggle('show', !!show);
+  }
+
   async function fetchSkipIntro(relPath) {
     try {
       const r = await fetch(`/skipintro?p=${encodeURIComponent(relPath)}`);
@@ -90,6 +151,32 @@
     const t = Number(currentTime) || 0;
     const show = t >= skipIntroWindow.start && t < skipIntroWindow.end;
     if (show !== lastSkipVisible) setSkipBtnVisible(show);
+  }
+
+  async function fetchNextEpisode(relPath) {
+    try {
+      const r = await fetch(`/nextepisode?p=${encodeURIComponent(relPath)}`);
+      if (!r.ok) return null;
+      const j = await r.json().catch(() => ({}));
+      if (j && typeof j.at === 'number' && j.at >= 0) {
+        return j.at;
+      }
+      // Fallback if server only returns offset (when duration unknown)
+      if (j && typeof j.offset === 'number' && currentItem && typeof currentItem.duration === 'number') {
+        const dur = currentItem.duration || 0;
+        const at = j.offset < 0 ? Math.max(0, dur + j.offset) : Math.max(0, Math.min(dur, j.offset));
+        return at;
+      }
+    } catch {}
+    return null;
+  }
+
+  function updateNextBtnVisibility(currentTime) {
+    if (nextEpAt == null) { setNextBtnVisible(false); return; }
+    const t = Number(currentTime) || 0;
+    // Show once we reach trigger time; keep visible until end
+    const show = t >= nextEpAt && (activeIndex < filtered.length);
+    if (show !== lastNextVisible) setNextBtnVisible(show);
   }
 
   // Subtitle tools live under the video (collapsible panel)
@@ -175,15 +262,31 @@
     }
     wireLiftForControls();
     ensureSkipIntroUI();
+    ensureNextEpisodeUI();
   });
 
   player.on('timeupdate', () => {
     updateSkipBtnVisibility(player.currentTime || 0);
+    updateNextBtnVisibility(player.currentTime || 0);
+    // Persist resume position (throttled)
+    try {
+      if (!currentRelPath) return;
+      const now = Date.now();
+      const t = Number(player.currentTime || 0);
+      // If we're in the .nextepisode span (outro), don't keep resume
+      if (nextEpAt != null && t >= Math.max(0, nextEpAt - 1)) { clearResume(currentRelPath); return; }
+      if (now - lastResumeSaveTs >= 1500) {
+        const d = approxDuration();
+        saveResume(currentRelPath, t, d || null);
+        lastResumeSaveTs = now;
+      }
+    } catch {}
   });
   player.on('seeking', () => {
     updateSkipBtnVisibility(player.currentTime || 0);
+    updateNextBtnVisibility(player.currentTime || 0);
   });
-  player.on('ended', () => setSkipBtnVisible(false));
+  player.on('ended', () => { setSkipBtnVisible(false); setNextBtnVisible(false); if (currentRelPath) clearResume(currentRelPath); });
 
   // Toggle button under the video
   if (sdToggleBtn) {
@@ -500,11 +603,56 @@
       tracks,
     };
 
+    // Pre-fetch next-episode trigger so resume logic can respect it
+    ensureNextEpisodeUI();
+    if (activeIndex < filtered.length - 1) {
+      nextEpAt = await fetchNextEpisode(item.relPath);
+    } else {
+      nextEpAt = null;
+    }
+    updateNextBtnVisibility(0);
+
     // Provide a real duration for plyr to display when streaming
     // fragmented MP4 where the intrinsic duration is unknown.
     player.config.duration = item.duration || null;
     player.source = source;
-    player.play();
+    // Robust resume after new source is set (handles fast metadata and fallbacks)
+    (function applyResume() {
+      try {
+        const resume = loadResume(item.relPath);
+        if (!resume || typeof resume.t !== 'number' || resume.t <= 0) { player.play(); return; }
+        // If saved time is within the .nextepisode span (outro), do not resume
+        if (nextEpAt != null && resume.t >= Math.max(0, nextEpAt - 1)) {
+          clearResume(item.relPath);
+          player.play();
+          return;
+        }
+        const target = Math.max(0, resume.t);
+        let applied = false;
+        const seekAndPlay = () => {
+          if (applied) return;
+          applied = true;
+          try { player.currentTime = target; } catch {}
+          try { player.play(); } catch {}
+        };
+        // If metadata is already available, seek immediately
+        try {
+          if ((videoEl.readyState || 0) >= 1 && (videoEl.duration || player.duration || 0)) {
+            seekAndPlay();
+          }
+        } catch {}
+        // Otherwise, hook events; race to first
+        videoEl.addEventListener('loadedmetadata', seekAndPlay, { once: true });
+        videoEl.addEventListener('canplay', seekAndPlay, { once: true });
+        videoEl.addEventListener('loadeddata', seekAndPlay, { once: true });
+        const onTu = () => { if (!applied && (Number(videoEl.currentTime||0) < target - 0.25)) seekAndPlay(); };
+        videoEl.addEventListener('timeupdate', onTu, { once: true });
+        // Safety timeout in case events are missed
+        setTimeout(seekAndPlay, 1000);
+      } catch {
+        try { player.play(); } catch {}
+      }
+    })();
     nowTitle.textContent = item.name.replace(/\.[^.]+$/, '');
     const durStr = item.duration ? ` • ${formatDuration(item.duration)}` : '';
     nowMeta.textContent = `${item.ext.replace('.', '').toUpperCase()} • ${bytesToSize(item.size)}${durStr}`;
@@ -532,7 +680,25 @@
         };
         console.warn('Retrying with transcode=1 for better compatibility');
         player.source = retry;
-        player.play();
+        // Re-apply resume for fallback source
+        (function applyResume() {
+          try {
+            const resume = loadResume(item.relPath);
+            if (!resume || typeof resume.t !== 'number' || resume.t <= 0) { player.play(); return; }
+            // Respect .nextepisode span for resume decision
+            if (nextEpAt != null && resume.t >= Math.max(0, nextEpAt - 1)) { clearResume(item.relPath); player.play(); return; }
+            const target = Math.max(0, resume.t);
+            let applied = false;
+            const seekAndPlay = () => { if (applied) return; applied = true; try { player.currentTime = target; } catch {}; try { player.play(); } catch {}; };
+            try { if ((videoEl.readyState||0) >= 1 && (videoEl.duration||player.duration||0)) { seekAndPlay(); } } catch {}
+            videoEl.addEventListener('loadedmetadata', seekAndPlay, { once: true });
+            videoEl.addEventListener('canplay', seekAndPlay, { once: true });
+            videoEl.addEventListener('loadeddata', seekAndPlay, { once: true });
+            const onTu = () => { if (!applied && (Number(videoEl.currentTime||0) < target - 0.25)) seekAndPlay(); };
+            videoEl.addEventListener('timeupdate', onTu, { once: true });
+            setTimeout(seekAndPlay, 1000);
+          } catch { try { player.play(); } catch {} }
+        })();
       }
       videoEl.removeEventListener('error', onError);
     };

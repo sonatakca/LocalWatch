@@ -930,6 +930,97 @@ app.get('/skipintro', (req, res) => {
   return res.json({ start: se.start, end: se.end });
 });
 
+// Next-episode helpers
+function parseSignedTime(str) {
+  if (!str) return null;
+  const s = String(str).trim();
+  const sign = s.startsWith('-') ? -1 : 1;
+  const raw = s.replace(/^[-+]/, '');
+  // Support mm:ss or hh:mm:ss (optionally with .ms)
+  const sec = parseHhMmSs(raw);
+  if (sec == null) return null;
+  return sign * sec;
+}
+
+function parseNextEpisodeFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    let offset = null; // seconds; negative => from end; positive => from start
+    raw.split(/\r?\n/).forEach((line) => {
+      const ln = line.trim();
+      if (!ln || ln.startsWith('#') || ln.startsWith('//')) return;
+      // Accept formats like: o -> -01:05  or  outro: -00:45  or next=47:00
+      const m = ln.match(/^(o|outro|next|nextepisode)\s*(?:->|:|=)?\s*([^#;]+)/i);
+      if (m) {
+        const v = parseSignedTime(m[2].trim());
+        if (v != null) offset = v;
+      }
+    });
+    if (offset == null) return null;
+    return { offset };
+  } catch (e) {
+    return null;
+  }
+}
+
+function findNextEpisodeForVideo(filePath) {
+  try {
+    let dir = path.dirname(filePath);
+    const root = path.resolve(VIDEO_DIR);
+    while (dir && dir.length >= root.length) {
+      const cand = path.join(dir, '.nextepisode');
+      if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+        const ne = parseNextEpisodeFile(cand);
+        if (ne) return ne;
+      }
+      if (dir === root) break;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {}
+  return null;
+}
+
+// Return next-episode trigger time for a given video
+// GET /nextepisode?p=<relative video path>
+// Response: { at: <seconds-from-start> }
+app.get('/nextepisode', async (req, res) => {
+  const relPath = req.query.p;
+  if (!relPath || typeof relPath !== 'string') {
+    return res.status(400).json({});
+  }
+  const filePath = resolveSafe(relPath);
+  if (!filePath || !fs.existsSync(filePath)) {
+    return res.status(404).json({});
+  }
+  const data = findNextEpisodeForVideo(filePath);
+  if (!data || typeof data.offset !== 'number' || !Number.isFinite(data.offset)) {
+    return res.json({});
+  }
+  // Compute absolute time.
+  let duration = null;
+  try {
+    const st = fs.statSync(filePath);
+    const key = `${filePath}:${st.size}:${st.mtimeMs}`;
+    let meta = metaCache.get(key);
+    if (!meta) {
+      meta = await probe(filePath);
+      metaCache.set(key, meta || {});
+    }
+    if (meta && typeof meta.durationSec === 'number') duration = meta.durationSec;
+  } catch {}
+  // If no duration available, return a relative offset indicator
+  if (duration == null) {
+    // When duration is unknown, only emit offset so client can decide
+    return res.json({ offset: data.offset });
+  }
+  let at = null;
+  if (data.offset < 0) at = Math.max(0, duration + data.offset);
+  else at = Math.max(0, Math.min(duration, data.offset));
+  return res.json({ at });
+});
+
 function shiftWebVtt(content, offsetMs) {
   if (!offsetMs) return content;
   const add = (ms) => {
