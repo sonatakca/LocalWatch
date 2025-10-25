@@ -1,0 +1,3 @@
+# Ignore media contents, keep folder via .gitkeep
+/media/*
+!/media/.gitkeep
