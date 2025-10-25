@@ -31,8 +31,9 @@
     ratio: '16:9',
     captions: { active: true, language: 'auto' },
     keyboard: { focused: true, global: true },
+    seekTime: 10, // +/- 10s jumps
     controls: [
-      'play-large', 'play', 'progress', 'current-time', 'duration', 'mute', 'volume', 'settings', 'pip', 'airplay', 'fullscreen'
+      'play-large', 'rewind', 'play', 'fast-forward', 'progress', 'current-time', 'duration', 'mute', 'volume', 'settings', 'pip', 'airplay', 'fullscreen'
     ],
   });
 
@@ -263,7 +264,50 @@
     wireLiftForControls();
     ensureSkipIntroUI();
     ensureNextEpisodeUI();
+    try { applyCustomSeekIcons(); } catch {}
   });
+
+  // Replace Plyr's default rewind/forward icons with custom SVGs
+  function applyCustomSeekIcons() {
+    const controls = player && player.elements && player.elements.controls;
+    if (!controls) return;
+
+    const rewindBtn = controls.querySelector('button[data-plyr="rewind"]');
+    const ffBtn = controls.querySelector('button[data-plyr="fast-forward"]');
+
+    const setIcon = (btn, svgMarkup) => {
+      if (!btn) return;
+      // Remove existing SVGs but keep tooltips or other children
+      btn.querySelectorAll('svg').forEach((el) => el.remove());
+      // Insert our custom SVG icon
+      const tpl = document.createElement('template');
+      tpl.innerHTML = svgMarkup.trim();
+      const icon = tpl.content.firstChild;
+      if (icon) btn.insertBefore(icon, btn.firstChild);
+    };
+
+    // Use currentColor so the icon matches theme
+    const rewindSvg = `
+      <svg aria-hidden="true" focusable="false" class="lw-icon" width="22" height="22" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" stroke-width="3" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vector-effect: non-scaling-stroke; pointer-events: none;">
+        <polyline points="9.57 15.41 12.17 24.05 20.81 21.44" stroke-linecap="round"></polyline>
+        <path d="M26.93,41.41V23a.09.09,0,0,0-.16-.07s-2.58,3.69-4.17,4.78" stroke-linecap="round"></path>
+        <rect x="32.19" y="22.52" width="11.41" height="18.89" rx="5.7"></rect>
+        <path d="M12.14,23.94a21.91,21.91,0,1,1-.91,13.25" stroke-linecap="round"></path>
+      </svg>
+    `;
+
+    const forwardSvg = `
+      <svg aria-hidden="true" focusable="false" class="lw-icon" width="22" height="22" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" stroke-width="3" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vector-effect: non-scaling-stroke; pointer-events: none;">
+        <path d="M23.93,41.41V23a.09.09,0,0,0-.16-.07s-2.58,3.69-4.17,4.78" stroke-linecap="round"></path>
+        <rect x="29.19" y="22.52" width="11.41" height="18.89" rx="5.7"></rect>
+        <polyline points="54.43 15.41 51.83 24.05 43.19 21.44" stroke-linecap="round"></polyline>
+        <path d="M51.86,23.94a21.91,21.91,0,1,0,.91,13.25" stroke-linecap="round"></path>
+      </svg>
+    `;
+
+    setIcon(rewindBtn, rewindSvg);
+    setIcon(ffBtn, forwardSvg);
+  }
 
   player.on('timeupdate', () => {
     updateSkipBtnVisibility(player.currentTime || 0);

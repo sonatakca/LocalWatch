@@ -317,6 +317,21 @@ body {
 /* Hide default Captions row so we can use custom On/Off */
 .plyr__menu__container [data-plyr="captions"] { display: none !important; }
 
+/* Ensure custom rewind/forward icons render as stroked outlines (not filled) */
+.plyr__controls [data-plyr="rewind"] svg.lw-icon,
+.plyr__controls [data-plyr="fast-forward"] svg.lw-icon {
+  width: 22px; height: 22px;
+  stroke: currentColor !important;
+  fill: none !important;
+}
+.plyr__controls [data-plyr="rewind"] svg.lw-icon *,
+.plyr__controls [data-plyr="fast-forward"] svg.lw-icon * {
+  stroke: currentColor !important;
+  fill: none !important;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* remove debug outline if any */
 
 @media (max-width: 960px) {
