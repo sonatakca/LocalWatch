@@ -810,8 +810,10 @@ function findSubsForVideo(filePath) {
   try {
     const dir = path.dirname(filePath);
     const videoBase = path.basename(filePath, path.extname(filePath));
-    const tokenMatch = videoBase.match(/S\d{1,3}E\d{1,3}/i);
-    const token = tokenMatch ? tokenMatch[0].toLowerCase() : null;
+    const tokenMatch = videoBase.match(/S(\d{1,3})E(\d{1,3})/i);
+    const season = tokenMatch ? parseInt(tokenMatch[1], 10) : null;
+    const episode = tokenMatch ? parseInt(tokenMatch[2], 10) : null;
+
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     const subs = [];
     for (const de of entries) {
@@ -820,9 +822,25 @@ function findSubsForVideo(filePath) {
       if (!SUB_EXTS.has(ext)) continue;
       const nameLower = de.name.toLowerCase();
       const nameNoExtLower = path.basename(de.name, ext).toLowerCase();
-      const matchesToken = token && (nameLower.includes(token));
-      const matchesBase = !token && (nameNoExtLower.includes(videoBase.toLowerCase()));
-      if (matchesToken || matchesBase) {
+
+      let matches = false;
+      if (season != null && episode != null) {
+        // Match SxxExx with optional zero-padding and ensure E1 doesn't match E10
+        // Example: season=2, episode=1 matches s2e1, s02e01, s002e001, and variants with separators
+        const reTight = new RegExp(`s0*${season}e0*${episode}(?!\\d)`, 'i');
+        if (reTight.test(nameLower)) {
+          matches = true;
+        } else {
+          // Allow a non-alnum separator between season and episode (e.g., s02.e01 or s02 e01)
+          const reSep = new RegExp(`s0*${season}[^a-z0-9]?e0*${episode}(?!\\d)`, 'i');
+          matches = reSep.test(nameLower);
+        }
+      } else {
+        // Fallback for videos without SxxExx token: rely on basename inclusion
+        matches = nameNoExtLower.includes(videoBase.toLowerCase());
+      }
+
+      if (matches) {
         const lang = parseLangFromFilename(de.name) || 'en';
         subs.push({ file: de.name, lang, label: langLabel(lang) });
       }

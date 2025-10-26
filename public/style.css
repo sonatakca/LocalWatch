@@ -430,7 +430,7 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   transition: transform 450ms ease, opacity 450ms ease;
 }
 .lw-tap-feedback .pulse.fade {
-  transform: scale(1.2);
+  transform: scale(10);
   opacity: 0;
 }
 .lw-tap-feedback .label {

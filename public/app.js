@@ -32,6 +32,8 @@
     ratio: '16:9',
     captions: { active: true, language: 'auto' },
     keyboard: { focused: true, global: true },
+    // Prefer element-based fullscreen so overlays render on iPad
+    fullscreen: { enabled: true, fallback: true, iosNative: false },
     seekTime: 10, // +/- 10s jumps
     controls: [
       'play-large', 'rewind', 'play', 'fast-forward', 'progress', 'current-time', 'duration', 'mute', 'volume', 'settings', 'pip', 'airplay', 'fullscreen'
@@ -1044,7 +1046,7 @@
 
   // Touch-friendly gestures: double-tap left/right to seek ±seekTime
   function ensureTapGestures() {
-    const container = document.querySelector('.player-container');
+    const container = (player && player.elements && player.elements.container) || document.querySelector('.player-container');
     if (!container || container.dataset.lwTapWired === '1') return;
     container.dataset.lwTapWired = '1';
 
