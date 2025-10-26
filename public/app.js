@@ -97,7 +97,7 @@
         try {
           const t = Math.max(0, Number(skipIntroWindow.end) || 0);
           player.currentTime = t + 0.01;
-          player.play();
+          attemptPlayWithMutedFallback();
         } catch {}
         setSkipBtnVisible(false);
       });
@@ -127,7 +127,17 @@
       btn.addEventListener('click', () => {
         try {
           if (activeIndex >= 0 && activeIndex < filtered.length - 1) {
-            playIndex(activeIndex + 1);
+            const target = activeIndex + 1;
+            // Ensure sound is on for user‑gesture next
+            try {
+              videoEl.autoplay = true;
+              if (player) player.muted = false;
+              if (videoEl) { videoEl.muted = false; videoEl.removeAttribute('muted'); }
+            } catch {}
+            // Kick playback immediately within the gesture
+            Promise.resolve(playIndex(target)).then(() => {
+              try { const pp = player && player.play && player.play(); if (pp && pp.catch) pp.catch(() => {}); } catch {}
+            });
           }
         } catch {}
         setNextBtnVisible(false);
@@ -213,6 +223,40 @@
     if (resetSuppression) nextAutoSkipSuppressed = false;
   }
 
+  // Attempt to start playback; if blocked by autoplay policy, retry muted then restore.
+  function attemptPlayWithMutedFallback() {
+    try {
+      const p = player && player.play && player.play();
+      if (p && typeof p.catch === 'function') {
+        p.catch((err) => {
+          try {
+            const msg = String((err && (err.name || err.message)) || err || '');
+            if (!/NotAllowedError|Autoplay|play\(\) failed|operation is not allowed/i.test(msg)) return;
+          } catch {}
+          const wasMuted = !!(player && player.muted);
+          try {
+            if (player) player.muted = true;
+            if (videoEl) { videoEl.muted = true; videoEl.setAttribute('muted', ''); }
+          } catch {}
+          const p2 = player && player.play && player.play();
+          if (p2 && typeof p2.catch === 'function') { try { p2.catch(() => {}); } catch {} }
+          const restore = () => {
+            try { videoEl.removeEventListener('playing', restore); } catch {}
+            if (!wasMuted) {
+              setTimeout(() => {
+                try {
+                  if (player) player.muted = false;
+                  if (videoEl) { videoEl.muted = false; videoEl.removeAttribute('muted'); }
+                } catch {}
+              }, 80);
+            }
+          };
+          try { videoEl.addEventListener('playing', restore, { once: true }); } catch {}
+        });
+      }
+    } catch {}
+  }
+
   function startNextAutoSkipCountdown(ms) {
     clearNextAutoSkip(false);
     if (!nextBtnEl) return;
@@ -246,7 +290,18 @@
       if (!lastNextVisible || nextAutoSkipSuppressed) { clearNextAutoSkip(false); return; }
       try {
         if (activeIndex >= 0 && activeIndex < filtered.length - 1) {
-          playIndex(activeIndex + 1);
+          const target = activeIndex + 1;
+          // Hint autoplay; then play on readiness with muted fallback if needed
+          try { videoEl.autoplay = true; } catch {}
+          Promise.resolve(playIndex(target)).then(() => {
+            const onReady = () => { attemptPlayWithMutedFallback(); };
+            try {
+              videoEl.addEventListener('loadeddata', onReady, { once: true });
+              videoEl.addEventListener('canplay', onReady, { once: true });
+            } catch {}
+            // Also attempt shortly in case events already fired
+            setTimeout(onReady, 0);
+          });
         }
       } catch {}
       clearNextAutoSkip(true);
@@ -655,7 +710,7 @@
     player.source = source;
     videoEl.addEventListener('loadeddata', () => {
       try { player.currentTime = time; } catch {}
-      if (!paused) player.play();
+      if (!paused) attemptPlayWithMutedFallback();
     }, { once: true });
   }
 
@@ -739,11 +794,11 @@
     (function applyResume() {
       try {
         const resume = loadResume(item.relPath);
-        if (!resume || typeof resume.t !== 'number' || resume.t <= 0) { player.play(); return; }
+        if (!resume || typeof resume.t !== 'number' || resume.t <= 0) { attemptPlayWithMutedFallback(); return; }
         // If saved time is within the .nextepisode span (outro), do not resume
         if (nextEpAt != null && resume.t >= Math.max(0, nextEpAt - 1)) {
           clearResume(item.relPath);
-          player.play();
+          attemptPlayWithMutedFallback();
           return;
         }
         const target = Math.max(0, resume.t);
@@ -752,7 +807,7 @@
           if (applied) return;
           applied = true;
           try { player.currentTime = target; } catch {}
-          try { player.play(); } catch {}
+          attemptPlayWithMutedFallback();
         };
         // If metadata is already available, seek immediately
         try {
@@ -769,7 +824,7 @@
         // Safety timeout in case events are missed
         setTimeout(seekAndPlay, 1000);
       } catch {
-        try { player.play(); } catch {}
+        attemptPlayWithMutedFallback();
       }
     })();
     nowTitle.textContent = item.name.replace(/\.[^.]+$/, '');
@@ -803,12 +858,12 @@
         (function applyResume() {
           try {
             const resume = loadResume(item.relPath);
-            if (!resume || typeof resume.t !== 'number' || resume.t <= 0) { player.play(); return; }
+            if (!resume || typeof resume.t !== 'number' || resume.t <= 0) { attemptPlayWithMutedFallback(); return; }
             // Respect .nextepisode span for resume decision
-            if (nextEpAt != null && resume.t >= Math.max(0, nextEpAt - 1)) { clearResume(item.relPath); player.play(); return; }
+            if (nextEpAt != null && resume.t >= Math.max(0, nextEpAt - 1)) { clearResume(item.relPath); attemptPlayWithMutedFallback(); return; }
             const target = Math.max(0, resume.t);
             let applied = false;
-            const seekAndPlay = () => { if (applied) return; applied = true; try { player.currentTime = target; } catch {}; try { player.play(); } catch {}; };
+            const seekAndPlay = () => { if (applied) return; applied = true; try { player.currentTime = target; } catch {}; attemptPlayWithMutedFallback(); };
             try { if ((videoEl.readyState||0) >= 1 && (videoEl.duration||player.duration||0)) { seekAndPlay(); } } catch {}
             videoEl.addEventListener('loadedmetadata', seekAndPlay, { once: true });
             videoEl.addEventListener('canplay', seekAndPlay, { once: true });
@@ -816,7 +871,7 @@
             const onTu = () => { if (!applied && (Number(videoEl.currentTime||0) < target - 0.25)) seekAndPlay(); };
             videoEl.addEventListener('timeupdate', onTu, { once: true });
             setTimeout(seekAndPlay, 1000);
-          } catch { try { player.play(); } catch {} }
+          } catch { attemptPlayWithMutedFallback(); }
         })();
       }
       videoEl.removeEventListener('error', onError);
@@ -1107,7 +1162,7 @@
           const cur = Number(player.currentTime || 0);
           const next = Math.max(0, cur + (isRight ? +seekDelta : -seekDelta));
           player.currentTime = next;
-          if (wasPlaying) { try { player.play(); } catch {} }
+          if (wasPlaying) { attemptPlayWithMutedFallback(); }
         } catch {}
         showFeedback(cx - rect.left, cy - rect.top, (isRight ? '+' : '−') + seekDelta + 's');
         lastTapTime = 0; // reset sequence
