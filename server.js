@@ -87,6 +87,32 @@ function resolveSafe(relativePath) {
 
 ensureVideoDir();
 
+// Optional Basic Auth for external exposure
+// Set AUTH_USER and AUTH_PASS to enable. Applies to all routes and static.
+const AUTH_USER = process.env.AUTH_USER || '';
+const AUTH_PASS = process.env.AUTH_PASS || '';
+if (AUTH_USER && AUTH_PASS) {
+  app.use((req, res, next) => {
+    try {
+      const hdr = req.headers.authorization || '';
+      if (!hdr.startsWith('Basic ')) {
+        res.setHeader('WWW-Authenticate', 'Basic realm="LocalWatch"');
+        return res.status(401).end('Auth required');
+      }
+      const decoded = Buffer.from(hdr.slice(6), 'base64').toString('utf8');
+      const i = decoded.indexOf(':');
+      const u = i >= 0 ? decoded.slice(0, i) : decoded;
+      const p = i >= 0 ? decoded.slice(i + 1) : '';
+      if (u === AUTH_USER && p === AUTH_PASS) return next();
+      res.setHeader('WWW-Authenticate', 'Basic realm="LocalWatch"');
+      return res.status(401).end('Unauthorized');
+    } catch {
+      res.setHeader('WWW-Authenticate', 'Basic realm="LocalWatch"');
+      return res.status(401).end('Auth error');
+    }
+  });
+}
+
 // Shared file helpers
 function ensureParentDir(p) {
   fs.mkdirSync(path.dirname(p), { recursive: true });

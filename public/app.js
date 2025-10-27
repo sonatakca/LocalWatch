@@ -257,6 +257,71 @@
     } catch {}
   }
 
+  // Media Session integration for Bluetooth/OS controls (AirPods, lock screen, etc.)
+  function setupMediaSessionControls() {
+    if (!('mediaSession' in navigator)) return;
+    const ms = navigator.mediaSession;
+    const trySet = (action, handler) => { try { ms.setActionHandler(action, handler); } catch {} };
+    const getSeekDelta = (d) => Math.max(1, Number((d && d.seekOffset) || (player && player.config && player.config.seekTime) || 10));
+
+    trySet('play', () => { attemptPlayWithMutedFallback(); });
+    trySet('pause', () => { try { player.pause(); } catch {} });
+    trySet('stop', () => { try { player.pause(); player.currentTime = 0; } catch {} });
+    trySet('seekbackward', (details) => {
+      try {
+        const delta = getSeekDelta(details);
+        player.currentTime = Math.max(0, Number(player.currentTime || 0) - delta);
+      } catch {}
+    });
+    trySet('seekforward', (details) => {
+      try {
+        const delta = getSeekDelta(details);
+        player.currentTime = Math.max(0, Number(player.currentTime || 0) + delta);
+      } catch {}
+    });
+    trySet('seekto', (details) => {
+      try {
+        if (details && typeof details.seekTime === 'number') {
+          player.currentTime = Math.max(0, details.seekTime);
+          if (details.fastSeek && 'fastSeek' in videoEl) { try { videoEl.fastSeek(details.seekTime); } catch {} }
+        }
+      } catch {}
+    });
+    trySet('previoustrack', () => { try { if (activeIndex > 0) { playIndex(activeIndex - 1); } } catch {} });
+    trySet('nexttrack', () => { try { if (activeIndex < filtered.length - 1) { playIndex(activeIndex + 1); } } catch {} });
+  }
+
+  function updateMediaMetadataFor(item) {
+    try {
+      if (!('mediaSession' in navigator) || !item) return;
+      const title = (item.name || '').replace(/\.[^.]+$/, '');
+      const album = 'LocalWatch';
+      const artist = item.category || 'Library';
+      const artUrl = `/thumb?p=${encodeURIComponent(item.relPath)}`;
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title,
+        artist,
+        album,
+        artwork: [
+          { src: artUrl, sizes: '256x256', type: 'image/png' },
+          { src: artUrl, sizes: '512x512', type: 'image/png' }
+        ]
+      });
+    } catch {}
+  }
+
+  function updateMediaPositionState() {
+    try {
+      if (!('mediaSession' in navigator)) return;
+      const duration = approxDuration() || 0;
+      const position = Number(player && player.currentTime) || Number(videoEl && videoEl.currentTime) || 0;
+      const playbackRate = Number(videoEl && videoEl.playbackRate) || 1;
+      if (typeof navigator.mediaSession.setPositionState === 'function') {
+        navigator.mediaSession.setPositionState({ duration, playbackRate, position });
+      }
+    } catch {}
+  }
+
   function startNextAutoSkipCountdown(ms) {
     clearNextAutoSkip(false);
     if (!nextBtnEl) return;
@@ -385,6 +450,7 @@
   // Try to wire on ready and whenever settings is opened
   player.on('ready', () => {
     setupSettingsMenu();
+    try { setupMediaSessionControls(); } catch {}
     const controls = player.elements && player.elements.controls;
     const settingsBtn = controls && controls.querySelector('button[aria-label="Settings"]');
     if (settingsBtn) {
@@ -442,6 +508,7 @@
   player.on('timeupdate', () => {
     updateSkipBtnVisibility(player.currentTime || 0);
     updateNextBtnVisibility(player.currentTime || 0);
+    try { updateMediaPositionState(); } catch {}
     // Persist resume position (throttled)
     try {
       if (!currentRelPath) return;
@@ -459,8 +526,11 @@
   player.on('seeking', () => {
     updateSkipBtnVisibility(player.currentTime || 0);
     updateNextBtnVisibility(player.currentTime || 0);
+    try { updateMediaPositionState(); } catch {}
   });
   player.on('ended', () => { setSkipBtnVisible(false); setNextBtnVisible(false); if (currentRelPath) clearResume(currentRelPath); });
+  player.on('play', () => { try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; } catch {} });
+  player.on('pause', () => { try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; } catch {} });
 
   // Toggle button under the video
   if (sdToggleBtn) {
@@ -708,6 +778,7 @@
     const paused = player.paused;
     player.config.duration = currentItem.duration || null;
     player.source = source;
+    try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
     videoEl.addEventListener('loadeddata', () => {
       try { player.currentTime = time; } catch {}
       if (!paused) attemptPlayWithMutedFallback();
@@ -790,6 +861,7 @@
     // fragmented MP4 where the intrinsic duration is unknown.
     player.config.duration = item.duration || null;
     player.source = source;
+    try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
     // Robust resume after new source is set (handles fast metadata and fallbacks)
     (function applyResume() {
       try {
@@ -854,6 +926,7 @@
         };
         console.warn('Retrying with transcode=1 for better compatibility');
         player.source = retry;
+        try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
         // Re-apply resume for fallback source
         (function applyResume() {
           try {
