@@ -38,6 +38,8 @@
     ratio: '16:9',
     captions: { active: true, language: 'auto' },
     keyboard: { focused: true, global: true },
+    // Do not toggle play/pause when clicking empty video area
+    clickToPlay: false,
     // Prefer element-based fullscreen so overlays render on iPad
     fullscreen: { enabled: true, fallback: true, iosNative: false },
     seekTime: 10, // +/- 10s jumps
