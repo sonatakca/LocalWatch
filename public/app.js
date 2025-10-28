@@ -136,7 +136,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn';
-      btn.textContent = 'Girişi Atla';
+      btn.textContent = 'İntroyu Atla';
       btn.addEventListener('click', () => {
         if (!skipIntroWindow) return;
         try {
