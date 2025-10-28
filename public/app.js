@@ -45,7 +45,7 @@
     seekTime: 10, // +/- 10s jumps
     controls: [
       // Removed 'play-large' to disable the big center button
-      'rewind', 'play', 'fast-forward', 'progress', 'current-time', 'duration', 'mute', 'volume', 'settings', 'pip', 'airplay', 'fullscreen'
+      'rewind', 'play', 'fast-forward','mute','volume', 'current-time','progress',  'duration',  'settings', 'pip', 'airplay', 'fullscreen'
     ],
   });
 
