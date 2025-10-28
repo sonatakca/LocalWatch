@@ -42,10 +42,46 @@
     clickToPlay: false,
     // Prefer element-based fullscreen so overlays render on iPad
     fullscreen: { enabled: true, fallback: true, iosNative: false },
+    i18n: {
+      restart: 'Baştan oynat',
+      rewind: 'Geri sar {seektime}s',
+      play: 'Oynat',
+      pause: 'Duraklat',
+      fastForward: 'İleri sar {seektime}s',
+      seek: 'Ara',
+      seekLabel: '{currentTime} / {duration}',
+      played: 'Oynatıldı',
+      buffered: 'Önbelleğe alındı',
+      currentTime: 'Şu anki süre',
+      duration: 'Süre',
+      volume: 'Ses',
+      mute: 'Sessize al',
+      unmute: 'Sesi aç',
+      enableCaptions: 'Altyazıları aç',
+      disableCaptions: 'Altyazıları kapat',
+      download: 'İndir',
+      enterFullscreen: 'Tam ekrana geç',
+      exitFullscreen: 'Tam ekrandan çık',
+      frameTitle: '{title} oynatıcı',
+      captions: 'Altyazılar',
+      settings: 'Ayarlar',
+      pip: 'Resim içinde resim',
+      airplay: 'AirPlay',
+      speed: 'Hız',
+      normal: 'Normal',
+      quality: 'Kalite',
+      loop: 'Döngü',
+      start: 'Başlangıç',
+      end: 'Bitiş',
+      all: 'Tümü',
+      reset: 'Sıfırla',
+      disabled: 'Kapalı',
+      enabled: 'Açık',
+    },
     seekTime: 10, // +/- 10s jumps
     controls: [
       // Removed 'play-large' to disable the big center button
-      'rewind', 'play', 'fast-forward','mute','volume', 'current-time','progress',  'duration',  'settings', 'pip', 'airplay', 'fullscreen'
+      'rewind', 'play', 'fast-forward','mute','volume', 'current-time','progress',  'duration',  'captions', 'pip', 'airplay', 'fullscreen'
     ],
   });
 
@@ -100,7 +136,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn';
-      btn.textContent = 'Skip Intro';
+      btn.textContent = 'Girişi Atla';
       btn.addEventListener('click', () => {
         if (!skipIntroWindow) return;
         try {
@@ -132,7 +168,7 @@
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn';
-      btn.textContent = 'Next Episode';
+      btn.textContent = 'Sonraki Bölüm';
       btn.addEventListener('click', () => {
         try {
           if (activeIndex >= 0 && activeIndex < filtered.length - 1) {
@@ -184,9 +220,9 @@
         return b;
       };
       // icons provided at top-level (svgPrev, svgPlay, svgPause, svgNext)
-      epBtnPrev = mkBtn('prev', 'Previous', svgPrev);
-      epBtnPlay = mkBtn('playpause', 'Pause/Resume', svgPause);
-      epBtnNext = mkBtn('next', 'Next', svgNext);
+      epBtnPrev = mkBtn('prev', 'Önceki', svgPrev);
+      epBtnPlay = mkBtn('playpause', 'Oynat/Duraklat', svgPause);
+      epBtnNext = mkBtn('next', 'Sonraki', svgNext);
 
       epBtnPrev.addEventListener('click', () => { try { if (activeIndex > 0) playIndex(activeIndex - 1); } catch {} });
       epBtnNext.addEventListener('click', () => { try { if (activeIndex < filtered.length - 1) playIndex(activeIndex + 1); } catch {} });
@@ -401,12 +437,14 @@
       try {
         const delta = getSeekDelta(details);
         player.currentTime = Math.max(0, Number(player.currentTime || 0) - delta);
+        showSeekFeedbackFixed(false, delta);
       } catch {}
     });
     trySet('seekforward', (details) => {
       try {
         const delta = getSeekDelta(details);
         player.currentTime = Math.max(0, Number(player.currentTime || 0) + delta);
+        showSeekFeedbackFixed(true, delta);
       } catch {}
     });
     trySet('seekto', (details) => {
@@ -518,7 +556,7 @@
   function setupSettingsMenu() {
     const controls = player.elements && player.elements.controls;
     if (!controls) return;
-    const settingsBtn = controls.querySelector('button[aria-label="Settings"]');
+    const settingsBtn = controls.querySelector('button[data-plyr="settings"]') || controls.querySelector('button[aria-label="Settings"]');
     if (!settingsBtn) return;
     const panelId = settingsBtn.getAttribute('aria-controls');
     const panel = panelId && document.getElementById(panelId);
@@ -532,19 +570,19 @@
     // Build our simple Subtitles On/Off
     const subHeader = document.createElement('div');
     subHeader.className = 'plyr__menu__heading';
-    subHeader.textContent = 'Subtitles';
+    subHeader.textContent = 'Altyazılar';
 
     const onBtn = document.createElement('button');
     onBtn.type = 'button';
     onBtn.className = 'plyr__control';
     onBtn.setAttribute('role', 'menuitemradio');
-    onBtn.textContent = 'On';
+    onBtn.textContent = 'Açık';
 
     const offBtn = document.createElement('button');
     offBtn.type = 'button';
     offBtn.className = 'plyr__control';
     offBtn.setAttribute('role', 'menuitemradio');
-    offBtn.textContent = 'Off';
+    offBtn.textContent = 'Kapalı';
 
     function refreshCaptionRadios() {
       const active = !!(player && player.captions && player.captions.active);
@@ -557,7 +595,7 @@
     const delayBtn = document.createElement('button');
     delayBtn.type = 'button';
     delayBtn.className = 'plyr__control';
-    delayBtn.textContent = 'Subtitle delay…';
+    delayBtn.textContent = 'Altyazı gecikmesi';
     delayBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleSubsTools(true);
@@ -582,8 +620,9 @@
     setupSettingsMenu();
     try { setupMediaSessionControls(); } catch {}
     const controls = player.elements && player.elements.controls;
-    const settingsBtn = controls && controls.querySelector('button[aria-label="Settings"]');
+    const settingsBtn = controls && (controls.querySelector('button[data-plyr="settings"]') || controls.querySelector('button[aria-label="Settings"]'));
     if (settingsBtn) {
+      try { settingsBtn.setAttribute('aria-label', 'Ayarlar'); settingsBtn.setAttribute('title', 'Ayarlar'); } catch {}
       settingsBtn.addEventListener('click', () => setTimeout(setupSettingsMenu, 0));
     }
     wireLiftForControls();
@@ -621,7 +660,7 @@
 
     // Use currentColor so the icon matches theme
     const rewindSvg = `
-      <svg aria-hidden="true" focusable="false" class="lw-icon" width="22" height="22" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" stroke-width="3" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vector-effect: non-scaling-stroke; pointer-events: none;">
+      <svg aria-hidden="true" focusable="false" class="lw-icon" width="22" height="22" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" stroke-width="4" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vector-effect: non-scaling-stroke; pointer-events: none;">
         <polyline points="9.57 15.41 12.17 24.05 20.81 21.44" stroke-linecap="round"></polyline>
         <path d="M26.93,41.41V23a.09.09,0,0,0-.16-.07s-2.58,3.69-4.17,4.78" stroke-linecap="round"></path>
         <rect x="32.19" y="22.52" width="11.41" height="18.89" rx="5.7"></rect>
@@ -630,7 +669,7 @@
     `;
 
     const forwardSvg = `
-      <svg aria-hidden="true" focusable="false" class="lw-icon" width="22" height="22" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" stroke-width="3" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vector-effect: non-scaling-stroke; pointer-events: none;">
+      <svg aria-hidden="true" focusable="false" class="lw-icon" width="22" height="22" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" stroke-width="4" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round" style="vector-effect: non-scaling-stroke; pointer-events: none;">
         <path d="M23.93,41.41V23a.09.09,0,0,0-.16-.07s-2.58,3.69-4.17,4.78" stroke-linecap="round"></path>
         <rect x="29.19" y="22.52" width="11.41" height="18.89" rx="5.7"></rect>
         <polyline points="54.43 15.41 51.83 24.05 43.19 21.44" stroke-linecap="round"></polyline>
@@ -665,6 +704,13 @@
       try { player.on('exitfullscreen', updateFsIcon); } catch {}
       try { videoEl.addEventListener('webkitpresentationmodechanged', updateFsIcon); } catch {}
     }
+
+    // Show fixed seek feedback when clicking rewind/forward buttons
+    try {
+      const delta = Math.max(1, Number(player && player.config && player.config.seekTime) || 10);
+      if (rewindBtn) rewindBtn.addEventListener('click', () => showSeekFeedbackFixed(false, delta));
+      if (ffBtn) ffBtn.addEventListener('click', () => showSeekFeedbackFixed(true, delta));
+    } catch {}
   }
 
   player.on('timeupdate', () => {
@@ -910,7 +956,7 @@
       const j = await r.json();
       return (j.tracks || []).map((t, i) => ({
         kind: 'captions',
-        label: t.label || t.lang || `Track ${i+1}`,
+        label: t.label || t.lang || `Parça ${i+1}`,
         srclang: t.lang || 'en',
         src: `${t.url}&offset_ms=${encodeURIComponent(delayMs || 0)}`,
         default: t.lang === 'en' ? true : i === 0,
@@ -1063,7 +1109,8 @@
     })();
     nowTitle.textContent = item.name.replace(/\.[^.]+$/, '');
     const durStr = item.duration ? ` • ${formatDuration(item.duration)}` : '';
-    nowMeta.textContent = `${item.ext.replace('.', '').toUpperCase()} • ${bytesToSize(item.size)}${durStr}`;
+    const catLabel = item.category === 'Uncategorized' ? 'Kategorisiz' : (item.category || '');
+    nowMeta.textContent = `${item.ext.replace('.', '').toUpperCase()} • ${bytesToSize(item.size)}${catLabel ? ' • ' + catLabel : ''}${durStr}`;
     highlightActive();
     currentRelPath = item.relPath;
     try { localStorage.setItem('LocalWatch:last', item.relPath); } catch {}
@@ -1158,9 +1205,10 @@
     };
 
     const total = groups.reduce((acc, g) => acc + (g.count || 0), 0);
-    catBar.appendChild(mkChip('All', 'All', total));
+    catBar.appendChild(mkChip('Tümü', 'All', total));
     for (const g of groups) {
-      catBar.appendChild(mkChip(g.name, g.key, g.count));
+      const label = (g.name === 'Uncategorized') ? 'Kategorisiz' : g.name;
+      catBar.appendChild(mkChip(label, g.key, g.count));
     }
   }
 
@@ -1209,6 +1257,14 @@
       if (activeIndex > 0) playIndex(activeIndex - 1);
     } else if (e.key === 'k') { // next
       if (activeIndex < filtered.length - 1) playIndex(activeIndex + 1);
+    } else if (e.key === 'ArrowLeft') {
+      // Show fixed feedback for backward seek
+      const delta = Math.max(1, Number((player && player.config && player.config.seekTime) || 10));
+      showSeekFeedbackFixed(false, delta);
+    } else if (e.key === 'ArrowRight') {
+      // Show fixed feedback for forward seek
+      const delta = Math.max(1, Number((player && player.config && player.config.seekTime) || 10));
+      showSeekFeedbackFixed(true, delta);
     }
   });
 
@@ -1385,8 +1441,10 @@
         fbHost.appendChild(el);
       }
       const rect = container.getBoundingClientRect();
-      const ax = sideRight ? rect.width * 0.82 : rect.width * 0.18;
-      const ay = rect.height * 0.35; // fixed vertical anchor
+      // Place label at fixed anchors (1x / 7x), but keep pulse at tap point
+      const unit = rect.width / 8;
+      const ax = sideRight ? unit * 7 : unit * 1;
+      const ay = rect.height / 2; // vertically centered
       a.el.style.left = `${ax}px`;
       a.el.style.top = `${ay}px`;
       a.el.textContent = text;
@@ -1512,6 +1570,100 @@
     }
   }
 
+  // Show the same seek feedback used by double‑tap when seek is triggered
+  // by keyboard arrows, media keys, or Plyr rewind/forward buttons.
+  // Uses fixed anchor positions (left/right) instead of pointer location.
+  function showSeekFeedbackFixed(isForward, amountSeconds) {
+    try {
+      const container = (player && player.elements && player.elements.container) || document.querySelector('.player-container');
+      if (!container) return;
+      let fbHost = container.querySelector('.lw-tap-feedback');
+      if (!fbHost) {
+        fbHost = document.createElement('div');
+        fbHost.className = 'lw-tap-feedback';
+        container.appendChild(fbHost);
+      }
+      // Persistent aggregation per side stored on the host
+      if (!fbHost._lwFixedAgg) {
+        fbHost._lwFixedAgg = { left: { el: null, hideTimer: null, sum: 0, lastTs: 0 }, right: { el: null, hideTimer: null, sum: 0, lastTs: 0 } };
+      }
+      const side = isForward ? 'right' : 'left';
+      const other = isForward ? 'left' : 'right';
+      const agg = fbHost._lwFixedAgg[side];
+
+      const rect = container.getBoundingClientRect();
+      // Fixed anchors for non-tap seeks:
+      // width is 8x → left at 1x, right at 7x; vertically centered
+      const unit = rect.width / 8;
+      const ax = isForward ? unit * 7 : unit * 1;
+      const ay = rect.height / 2;
+
+      const now = Date.now();
+      // If enough time has elapsed, start a new accumulation
+      if (now - (agg.lastTs || 0) > 600) agg.sum = 0;
+      const delta = Math.max(1, Number(amountSeconds || (player && player.config && player.config.seekTime) || 10));
+      agg.sum += delta;
+      agg.lastTs = now;
+
+      // Create label element if needed
+      if (!agg.el) {
+        const el = document.createElement('div');
+        el.className = 'label';
+        fbHost.appendChild(el);
+        agg.el = el;
+      }
+      // Position and text
+      agg.el.style.left = `${ax}px`;
+      agg.el.style.top = `${ay}px`;
+      const sign = isForward ? '+' : '-';
+      agg.el.textContent = `${sign}${agg.sum}s`;
+
+      // Animate in on first appearance of a new run
+      try {
+        agg.el.classList.remove('fade-out');
+        agg.el.classList.remove('fade-in');
+        void agg.el.offsetWidth;
+        agg.el.classList.add('fade-in');
+      } catch {}
+
+      // Spawn a pulse at the anchor
+      const pulse = document.createElement('div');
+      pulse.className = 'pulse';
+      pulse.style.left = `${ax}px`;
+      pulse.style.top = `${ay}px`;
+      fbHost.appendChild(pulse);
+      requestAnimationFrame(() => { pulse.classList.add('fade'); });
+      setTimeout(() => { try { pulse.remove(); } catch {} }, 900);
+
+      // Fade out opposite side immediately to mimic double‑tap behavior
+      try {
+        const opp = fbHost._lwFixedAgg[other];
+        if (opp && opp.el) {
+          opp.el.classList.remove('fade-in');
+          opp.el.classList.add('fade-out');
+          const toRemove = opp.el;
+          const cleanup = () => { try { toRemove.remove(); } catch {}; if (opp.el === toRemove) opp.el = null; opp.sum = 0; };
+          toRemove.addEventListener('animationend', cleanup, { once: true });
+          setTimeout(cleanup, 400);
+        }
+      } catch {}
+
+      // Reset hide timer
+      clearTimeout(agg.hideTimer);
+      agg.hideTimer = setTimeout(() => {
+        if (!agg.el) { agg.sum = 0; return; }
+        try {
+          agg.el.classList.remove('fade-in');
+          agg.el.classList.add('fade-out');
+          const toRemove = agg.el;
+          const cleanup = () => { try { toRemove.remove(); } catch {}; if (agg.el === toRemove) agg.el = null; agg.sum = 0; };
+          toRemove.addEventListener('animationend', cleanup, { once: true });
+          setTimeout(cleanup, 400);
+        } catch { agg.el = null; agg.sum = 0; }
+      }, 1200);
+    } catch {}
+  }
+
   // Hide Plyr controls + our episode buttons when clicking empty space
   function setupEmptyClickDismiss() {
     const container = player && player.elements && player.elements.container;
@@ -1528,6 +1680,8 @@
         if (container.classList && !container.classList.contains('plyr--hide-controls')) {
           container.classList.add('plyr--hide-controls');
           try { epCtrlHost && epCtrlHost.classList.remove('open'); } catch {}
+          // Immediately drop subtitle lift so captions slide down when controls hide
+          try { document.documentElement.style.setProperty('--sub-lift', '0px'); } catch {}
         }
       } catch {}
     }, true);
