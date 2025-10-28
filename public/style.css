@@ -498,7 +498,7 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 /* Keep layout slots even when a button is unavailable */
 .lw-ep-ctrl .hidden { visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }
 .lw-ep-ctrl svg {
-  width: 100px; height: 100px; fill: currentColor;
+  fill: currentColor;
   display: block;
   transform-origin: 50% 50%;
   transform: translate(var(--icon-shift-x), var(--icon-shift-y));
@@ -525,7 +525,10 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 }
 .lw-ep-ctrl .ep-btn.playpause {
   position: absolute; left: 50%; top: 50%;
-  transform: translate(-50%, -50%);
+  transform: translate(-100%, -100%);
+}
+.ep-btn.playpause svg {
+  width: 150px; height: 150px;
 }
 .lw-ep-ctrl .ep-btn.next {
   position: absolute; left: 75%; top: 50%;

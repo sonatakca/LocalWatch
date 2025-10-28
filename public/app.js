@@ -29,7 +29,7 @@
 
   // Inline SVG icons (rounded)
   const svgPrev = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="14" width="6" height="36" rx="3"/><path d="M48 16 L24 32 L48 48 Z" fill="currentColor" stroke="currentColor" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/></svg>';
-  const svgPlay = '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M26 16 L26 48 L50 32 Z" fill="currentColor" stroke="currentColor" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+  const svgPlay = '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M23 16 L23 48 L47 32 Z" fill="currentColor" stroke="currentColor" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/></svg>';
   const svgPause = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="20" y="16" width="8" height="32" rx="2"/><rect x="36" y="16" width="8" height="32" rx="2"/></svg>';
   const svgNext = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="48" y="14" width="6" height="36" rx="3"/><path d="M16 16 L40 32 L16 48 Z" fill="currentColor" stroke="currentColor" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/></svg>';
 
@@ -162,6 +162,7 @@
   let epBtnPlay = null;
   let epBtnNext = null;
   let epAutoHideTimer = null;
+  let epHovering = false;
   function ensureEpisodeControlsUI() {
     try {
       const container = player && player.elements && player.elements.container;
@@ -206,6 +207,17 @@
       container.appendChild(host);
       epCtrlHost = host;
 
+      // Keep both overlays visible while hovering the episode controls
+      const hold = () => {
+        epHovering = true;
+        try { epCtrlHost.classList.add('open'); } catch {}
+        try { container.classList.remove('plyr--hide-controls'); } catch {}
+      };
+      const release = () => { epHovering = false; };
+      try { epBtnPrev.addEventListener('pointerenter', hold); epBtnPrev.addEventListener('pointerleave', release); } catch {}
+      try { epBtnPlay.addEventListener('pointerenter', hold); epBtnPlay.addEventListener('pointerleave', release); } catch {}
+      try { epBtnNext.addEventListener('pointerenter', hold); epBtnNext.addEventListener('pointerleave', release); } catch {}
+
       try { videoEl.addEventListener('play', () => updateEpisodeControls()); } catch {}
       try { videoEl.addEventListener('pause', () => updateEpisodeControls()); } catch {}
 
@@ -221,7 +233,17 @@
         try { epCtrlHost.classList.add('open'); } catch {}
       });
       player.on('controlsshown', () => { try { epCtrlHost.classList.add('open'); } catch {} });
-      player.on('controlshidden', () => { if (player && player.playing) { try { epCtrlHost.classList.remove('open'); } catch {} } });
+      player.on('controlshidden', () => {
+        if (epHovering) {
+          // While hovering, keep controls visible and our overlay open
+          try { container.classList.remove('plyr--hide-controls'); } catch {}
+          try { epCtrlHost.classList.add('open'); } catch {}
+          return;
+        }
+        if (player && player.playing) {
+          try { epCtrlHost.classList.remove('open'); } catch {}
+        }
+      });
 
       updateEpisodeControls();
     } catch {}
