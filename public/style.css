@@ -8,6 +8,8 @@
   --accent: #3ea6ff;
   --card: #1a1a1a;
   --border: #2a2a2a;
+  /* Override Plyr accent (progress/controls) to white */
+  --plyr-color-main: #ffffff;
 }
 
 /* Load Product Sans from bundled fonts (falls back to local if present). */
@@ -514,6 +516,20 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 .lw-ep-ctrl svg line {
   stroke-linejoin: round;
   stroke-linecap: round;
+}
+
+/* Make Plyr controls turn black on hover for visibility with white theme */
+.plyr--full-ui .plyr__controls .plyr__control:hover,
+.plyr--full-ui .plyr__controls .plyr__control:focus-visible,
+.plyr--full-ui .plyr__menu__container .plyr__control:hover,
+.plyr--full-ui .plyr__controls button[aria-expanded="true"] {
+  color: #000 !important;
+}
+.plyr--full-ui .plyr__controls .plyr__control:hover svg,
+.plyr--full-ui .plyr__controls .plyr__control:focus-visible svg,
+.plyr--full-ui .plyr__menu__container .plyr__control:hover svg {
+  fill: currentColor !important;
+  stroke: currentColor !important;
 }
 
 /* Absolute positions at 1/4, 2/4, 3/4 across the video */

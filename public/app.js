@@ -594,6 +594,7 @@
     try { setupEmptyClickDismiss(); } catch {}
     try { disableDblClickFullscreen(); } catch {}
     try { setupFullscreenTypingGuard(); } catch {}
+    try { setupIOSPWAFSFallback(); } catch {}
     try { applyCustomSeekIcons(); } catch {}
     try { ensureTapGestures(); } catch {}
   });
@@ -605,6 +606,7 @@
 
     const rewindBtn = controls.querySelector('button[data-plyr="rewind"]');
     const ffBtn = controls.querySelector('button[data-plyr="fast-forward"]');
+    const fsBtn = controls.querySelector('button[data-plyr="fullscreen"]');
 
     const setIcon = (btn, svgMarkup) => {
       if (!btn) return;
@@ -638,6 +640,31 @@
 
     setIcon(rewindBtn, rewindSvg);
     setIcon(ffBtn, forwardSvg);
+
+    // Use the exact paths from react-icons MdFullscreen / MdFullscreenExit
+    const fsEnterSvg = `
+      <svg aria-hidden="true" focusable="false" class="lw-icon" width="22" height="22" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="pointer-events: none;">
+        <path fill="none" d="M0 0h24v24H0z"></path>
+        <path fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"></path>
+      </svg>`;
+    const fsExitSvg = `
+      <svg aria-hidden="true" focusable="false" class="lw-icon" width="22" height="22" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="pointer-events: none;">
+        <path fill="none" d="M0 0h24v24H0z"></path>
+        <path fill="currentColor" d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"></path>
+      </svg>`;
+
+    const container = player && player.elements && player.elements.container;
+    const updateFsIcon = () => {
+      if (!fsBtn) return;
+      const isFs = (player && player.fullscreen && player.fullscreen.active) || (container && container.classList.contains('plyr--fullscreen')) || !!(document.fullscreenElement || document.webkitFullscreenElement);
+      setIcon(fsBtn, isFs ? fsExitSvg : fsEnterSvg);
+    };
+    if (fsBtn) {
+      updateFsIcon();
+      try { player.on('enterfullscreen', updateFsIcon); } catch {}
+      try { player.on('exitfullscreen', updateFsIcon); } catch {}
+      try { videoEl.addEventListener('webkitpresentationmodechanged', updateFsIcon); } catch {}
+    }
   }
 
   player.on('timeupdate', () => {
@@ -1553,6 +1580,58 @@
     document.addEventListener('keydown', keyHandler, { capture: true });
     document.addEventListener('fullscreenchange', onFsChange);
     document.addEventListener('webkitfullscreenchange', onFsChange);
+  }
+
+  // iOS PWA (standalone) doesn’t allow Element.requestFullscreen.
+  // If the Plyr fullscreen button is tapped and element fullscreen fails,
+  // fall back to native video fullscreen via WebKit APIs, and mirror the
+  // plyr--fullscreen class so the icon state stays consistent.
+  function setupIOSPWAFSFallback() {
+    const isIOS = (() => {
+      const ua = navigator.userAgent || '';
+      const iOS = /iPad|iPhone|iPod/.test(ua);
+      const iPadOS13Plus = (ua.includes('Mac OS X') && 'ontouchend' in document);
+      return iOS || iPadOS13Plus;
+    })();
+    const isStandalone = (() => {
+      return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || (window.navigator && window.navigator.standalone === true);
+    })();
+    if (!(isIOS && isStandalone)) return;
+
+    const container = player && player.elements && player.elements.container;
+    if (!container) return;
+    const fsBtn = container.querySelector('button[data-plyr="fullscreen"]');
+    if (!fsBtn) return;
+
+    const nativeFsActive = () => {
+      try { return videoEl && videoEl.webkitPresentationMode === 'fullscreen'; } catch { return false; }
+    };
+    const enterNativeFs = () => {
+      try {
+        if (videoEl && typeof videoEl.webkitSetPresentationMode === 'function') videoEl.webkitSetPresentationMode('fullscreen');
+        else if (videoEl && typeof videoEl.webkitEnterFullscreen === 'function') videoEl.webkitEnterFullscreen();
+      } catch {}
+    };
+    const exitNativeFs = () => {
+      try {
+        if (videoEl && typeof videoEl.webkitSetPresentationMode === 'function') videoEl.webkitSetPresentationMode('inline');
+      } catch {}
+    };
+    const syncClass = () => {
+      try { container.classList.toggle('plyr--fullscreen', nativeFsActive()); } catch {}
+    };
+    try { videoEl.addEventListener('webkitpresentationmodechanged', syncClass); } catch {}
+
+    fsBtn.addEventListener('click', () => {
+      // Let Plyr try Element FS first, then fall back if it didn’t take effect.
+      setTimeout(() => {
+        const elementFs = !!(document.fullscreenElement || document.webkitFullscreenElement || (player && player.fullscreen && player.fullscreen.active));
+        if (!elementFs) {
+          if (nativeFsActive()) exitNativeFs(); else enterNativeFs();
+          syncClass();
+        }
+      }, 60);
+    });
   }
 
   async function uploadOne(file, relPath) {
