@@ -592,6 +592,7 @@
     ensureEpisodeControlsUI();
     updateEpisodeControls();
     try { setupEmptyClickDismiss(); } catch {}
+    try { disableDblClickFullscreen(); } catch {}
     try { setupFullscreenTypingGuard(); } catch {}
     try { applyCustomSeekIcons(); } catch {}
     try { ensureTapGestures(); } catch {}
@@ -1503,6 +1504,28 @@
         }
       } catch {}
     }, true);
+  }
+
+  // Disable double‑click / double‑tap fullscreen to avoid conflict with
+  // our multi‑tap seek gestures. Fullscreen remains available via the
+  // dedicated control button.
+  function disableDblClickFullscreen() {
+    const container = player && player.elements && player.elements.container;
+    if (!container || container.dataset.lwNoDbl === '1') return;
+    container.dataset.lwNoDbl = '1';
+    // Block dblclick at capture phase for mouse/pen
+    container.addEventListener('dblclick', (e) => {
+      try { e.preventDefault(); e.stopPropagation(); } catch {}
+    }, true);
+    // Block double‑tap synthesized dblclick on touch devices
+    let lastTapTs = 0;
+    container.addEventListener('touchend', (e) => {
+      const now = Date.now();
+      if (now - lastTapTs < 350) {
+        try { e.preventDefault(); e.stopPropagation(); } catch {}
+      }
+      lastTapTs = now;
+    }, { passive: false });
   }
 
   // Prevent iPadOS Safari fullscreen "typing not allowed" alerts by
