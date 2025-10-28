@@ -36,7 +36,8 @@
     fullscreen: { enabled: true, fallback: true, iosNative: false },
     seekTime: 10, // +/- 10s jumps
     controls: [
-      'play-large', 'rewind', 'play', 'fast-forward', 'progress', 'current-time', 'duration', 'mute', 'volume', 'settings', 'pip', 'airplay', 'fullscreen'
+      // Removed 'play-large' to disable the big center button
+      'rewind', 'play', 'fast-forward', 'progress', 'current-time', 'duration', 'mute', 'volume', 'settings', 'pip', 'airplay', 'fullscreen'
     ],
   });
 
@@ -147,6 +148,96 @@
       nextBtnHost = host;
       nextBtnEl = btn;
     } catch {}
+  }
+
+  // Episode quick controls (prev / play-pause / next)
+  let epCtrlHost = null;
+  let epBtnPrev = null;
+  let epBtnPlay = null;
+  let epBtnNext = null;
+  let epAutoHideTimer = null;
+  function ensureEpisodeControlsUI() {
+    try {
+      const container = player && player.elements && player.elements.container;
+      if (!container) return;
+      if (epCtrlHost && epCtrlHost.isConnected) return;
+      const host = document.createElement('div');
+      host.className = 'lw-ep-ctrl';
+      // Simple default icons using inline SVG
+      const mkBtn = (cls, title, svg) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ep-btn ' + cls;
+        b.title = title;
+        b.innerHTML = svg;
+        host.appendChild(b);
+        return b;
+      };
+      const svgPrev = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="14" width="6" height="36" rx="2"/><path d="M48 16 L24 32 L48 48 Z"/></svg>';
+      const svgPlay = '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M24 16 L24 48 L48 32 Z"/></svg>';
+      const svgPause = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="20" y="16" width="8" height="32" rx="2"/><rect x="36" y="16" width="8" height="32" rx="2"/></svg>';
+      const svgNext = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="48" y="14" width="6" height="36" rx="2"/><path d="M16 16 L40 32 L16 48 Z"/></svg>';
+      epBtnPrev = mkBtn('prev', 'Previous', svgPrev);
+      epBtnPlay = mkBtn('playpause', 'Pause/Resume', svgPause);
+      epBtnNext = mkBtn('next', 'Next', svgNext);
+
+      epBtnPrev.addEventListener('click', () => { try { if (activeIndex > 0) playIndex(activeIndex - 1); } catch {} });
+      epBtnNext.addEventListener('click', () => { try { if (activeIndex < filtered.length - 1) playIndex(activeIndex + 1); } catch {} });
+      epBtnPlay.addEventListener('click', () => {
+        try {
+          if (player && player.paused) attemptPlayWithMutedFallback();
+          else player.pause();
+          updateEpisodeControls();
+        } catch {}
+      });
+
+      container.appendChild(host);
+      epCtrlHost = host;
+
+      player.on('play', () => {
+        updateEpisodeControls();
+        // If controls are already hidden when playback resumes, hide our overlay too
+        if (container.classList.contains('plyr--hide-controls')) {
+          try { epCtrlHost.classList.remove('open'); } catch {}
+        }
+      });
+      player.on('pause', () => {
+        updateEpisodeControls();
+        try { epCtrlHost.classList.add('open'); } catch {}
+      });
+      player.on('controlsshown', () => { try { epCtrlHost.classList.add('open'); } catch {} });
+      player.on('controlshidden', () => { if (!player.paused) { try { epCtrlHost.classList.remove('open'); } catch {} } });
+
+      updateEpisodeControls();
+    } catch {}
+  }
+
+  function updateEpisodeControls() {
+    if (!epCtrlHost) return;
+    const hasPrev = activeIndex > 0;
+    const hasNext = filtered && activeIndex >= 0 && activeIndex < filtered.length - 1;
+    const paused = !!(player && player.paused);
+    epBtnPrev && epBtnPrev.classList.toggle('hidden', !hasPrev);
+    epBtnNext && epBtnNext.classList.toggle('hidden', !hasNext);
+    if (epBtnPlay) {
+      epBtnPlay.innerHTML = paused
+        ? '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M24 16 L24 48 L48 32 Z"/></svg>'
+        : '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="20" y="16" width="8" height="32" rx="2"/><rect x="36" y="16" width="8" height="32" rx="2"/></svg>';
+    }
+  }
+
+  function showEpisodeControls() {
+    ensureEpisodeControlsUI();
+    updateEpisodeControls();
+    if (!epCtrlHost) return;
+    epCtrlHost.classList.add('open');
+  }
+
+  function hideEpisodeControlsSoon(ms) {
+    if (!epCtrlHost) return;
+    clearTimeout(epAutoHideTimer);
+    const delay = Math.max(0, Number(ms || 0));
+    epAutoHideTimer = setTimeout(() => { try { epCtrlHost.classList.remove('open'); } catch {} }, delay);
   }
 
   function setNextBtnVisible(show) {
@@ -459,6 +550,9 @@
     wireLiftForControls();
     ensureSkipIntroUI();
     ensureNextEpisodeUI();
+    ensureEpisodeControlsUI();
+    updateEpisodeControls();
+    try { setupEmptyClickDismiss(); } catch {}
     try { setupFullscreenTypingGuard(); } catch {}
     try { applyCustomSeekIcons(); } catch {}
     try { ensureTapGestures(); } catch {}
@@ -1186,7 +1280,7 @@
     container.appendChild(fbHost);
 
     const seekDelta = Math.max(1, Number(player && player.config && player.config.seekTime) || 10);
-    const TAP_WINDOW_MS = 700;            // time window to aggregate taps
+    const TAP_WINDOW_MS = 350;            // tighter window to aggregate taps (was 700)
     const MAX_DIST_PX = 140;              // max movement to keep same sequence
     const PULSE_DURATION_MS = 900;        // visual burst length
     const AGG_LINGER_MS = 1200;           // time the label stays visible after last tap
@@ -1307,6 +1401,7 @@
         seq = { active: true, lastTime: now, count: 1, sideRight: isRight, applied: 0, lastPointerType: type, lastX: x, lastY: y };
         // 1 tap: no pulse, no label (as requested).
         // Do not interfere with the other side label or timers.
+        // Rely on Plyr controls visibility to show episode controls (synced by events).
         return;
       }
 
@@ -1337,10 +1432,38 @@
 
     // Prefer PointerEvents; fall back to touchend where PointerEvents unsupported
     if (window.PointerEvent) {
-      container.addEventListener('pointerup', onPointerUp, { passive: false });
+      container.addEventListener('pointerup', (e) => {
+        // Ignore taps on our episode controls overlay so they don't count
+        if (e.target && e.target.closest && e.target.closest('.lw-ep-ctrl')) return;
+        onPointerUp(e);
+      }, { passive: false });
     } else {
-      container.addEventListener('touchend', onPointerUp, { passive: false });
+      container.addEventListener('touchend', (e) => {
+        if (e.target && e.target.closest && e.target.closest('.lw-ep-ctrl')) return;
+        onPointerUp(e);
+      }, { passive: false });
     }
+  }
+
+  // Hide Plyr controls + our episode buttons when clicking empty space
+  function setupEmptyClickDismiss() {
+    const container = player && player.elements && player.elements.container;
+    if (!container || container.dataset.lwDismissWired === '1') return;
+    container.dataset.lwDismissWired = '1';
+    container.addEventListener('click', (e) => {
+      try {
+        const t = e.target;
+        // Ignore clicks on any Plyr UI or our buttons or timeline area
+        if (t.closest('.plyr__controls') || t.closest('.plyr__control') || t.closest('.plyr__menu') || t.closest('.plyr__progress') || t.closest('.lw-ep-ctrl')) {
+          return;
+        }
+        // Only act if controls are shown
+        if (container.classList && !container.classList.contains('plyr--hide-controls')) {
+          container.classList.add('plyr--hide-controls');
+          try { epCtrlHost && epCtrlHost.classList.remove('open'); } catch {}
+        }
+      } catch {}
+    }, true);
   }
 
   // Prevent iPadOS Safari fullscreen "typing not allowed" alerts by
