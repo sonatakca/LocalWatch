@@ -459,6 +459,7 @@
     wireLiftForControls();
     ensureSkipIntroUI();
     ensureNextEpisodeUI();
+    try { setupFullscreenTypingGuard(); } catch {}
     try { applyCustomSeekIcons(); } catch {}
     try { ensureTapGestures(); } catch {}
   });
@@ -1172,7 +1173,8 @@
     });
   }
 
-  // Touch-friendly gestures: double-tap left/right to seek ±seekTime
+  // Touch-friendly gestures: YouTube-style multi‑tap seek on left/right.
+  // 1 tap = no action; 2 taps = 10s; 3 taps = 20s; n taps = 10*(n-1)s.
   function ensureTapGestures() {
     const container = (player && player.elements && player.elements.container) || document.querySelector('.player-container');
     if (!container || container.dataset.lwTapWired === '1') return;
@@ -1183,28 +1185,99 @@
     fbHost.className = 'lw-tap-feedback';
     container.appendChild(fbHost);
 
-    let lastTapTime = 0;
-    let lastX = 0, lastY = 0;
-    let lastPointerType = '';
-
     const seekDelta = Math.max(1, Number(player && player.config && player.config.seekTime) || 10);
+    const TAP_WINDOW_MS = 700;            // time window to aggregate taps
+    const MAX_DIST_PX = 140;              // max movement to keep same sequence
+    const PULSE_DURATION_MS = 900;        // visual burst length
+    const AGG_LINGER_MS = 1200;           // time the label stays visible after last tap
 
-    function showFeedback(x, y, text) {
+    // Aggregate labels per side (left/right) with independent timers
+    const agg = {
+      left: { el: null, hideTimer: null },
+      right: { el: null, hideTimer: null },
+    };
+
+    function fadeOutAgg(sideRight) {
+      const side = sideRight ? 'right' : 'left';
+      const a = agg[side];
+      if (!a.el) return;
+      clearTimeout(a.hideTimer);
+      try {
+        a.el.classList.remove('fade-in');
+        a.el.classList.add('fade-out');
+        const toRemove = a.el;
+        const cleanup = () => { try { toRemove.remove(); } catch {} if (a.el === toRemove) a.el = null; };
+        toRemove.addEventListener('animationend', cleanup, { once: true });
+        setTimeout(cleanup, 400);
+      } catch {
+        try { a.el.remove(); } catch {}
+        a.el = null;
+      }
+    }
+    function showAgg(sideRight, text, animateIn) {
+      const side = sideRight ? 'right' : 'left';
+      const a = agg[side];
+      if (!a.el) {
+        const el = document.createElement('div');
+        el.className = 'label';
+        a.el = el;
+        fbHost.appendChild(el);
+      }
+      const rect = container.getBoundingClientRect();
+      const ax = sideRight ? rect.width * 0.82 : rect.width * 0.18;
+      const ay = rect.height * 0.35; // fixed vertical anchor
+      a.el.style.left = `${ax}px`;
+      a.el.style.top = `${ay}px`;
+      a.el.textContent = text;
+      // Only animate on first appearance within a sequence
+      try {
+        a.el.classList.remove('fade-out');
+        if (animateIn) {
+          a.el.classList.remove('fade-in');
+          void a.el.offsetWidth; // reflow
+          a.el.classList.add('fade-in');
+        } else {
+          a.el.classList.remove('fade-in');
+        }
+      } catch {}
+      clearTimeout(a.hideTimer);
+      a.hideTimer = setTimeout(() => {
+        if (!a.el) return;
+        try {
+          a.el.classList.remove('fade-in');
+          a.el.classList.add('fade-out');
+          const toRemove = a.el;
+          const cleanup = () => { try { toRemove.remove(); } catch {} if (a.el === toRemove) a.el = null; };
+          toRemove.addEventListener('animationend', cleanup, { once: true });
+          setTimeout(cleanup, 400);
+        } catch {
+          try { a.el.remove(); } catch {}
+          a.el = null;
+        }
+      }, AGG_LINGER_MS);
+    }
+
+    function spawnPulse(x, y) {
       const pulse = document.createElement('div');
       pulse.className = 'pulse';
       pulse.style.left = `${x}px`;
       pulse.style.top = `${y}px`;
-      const label = document.createElement('div');
-      label.className = 'label';
-      label.style.left = `${x}px`;
-      label.style.top = `${y - 56}px`;
-      label.textContent = text;
       fbHost.appendChild(pulse);
-      fbHost.appendChild(label);
-      // Animate out
       requestAnimationFrame(() => { pulse.classList.add('fade'); });
-      setTimeout(() => { try { pulse.remove(); label.remove(); } catch {} }, 500);
+      setTimeout(() => { try { pulse.remove(); } catch {} }, PULSE_DURATION_MS);
     }
+
+    // Current tap session within a short time window
+    let seq = {
+      active: false,
+      lastTime: 0,
+      count: 0,
+      sideRight: false,
+      applied: 0, // seconds already applied in this sequence
+      lastPointerType: '',
+      lastX: 0,
+      lastY: 0,
+    };
 
     function onPointerUp(e) {
       // Ignore interactions on controls
@@ -1220,30 +1293,46 @@
       }
       const x = cx - rect.left;
       const y = cy - rect.top;
+      const frac = x / Math.max(1, rect.width);
+      const isRight = frac >= 0.5;
 
-      const within = now - lastTapTime;
-      const dist = Math.hypot(x - lastX, y - lastY);
-      const isDouble = within > 0 && within < 300 && dist < 80 && (lastPointerType === type || !lastPointerType);
+      // Decide if we continue the current sequence
+      const within = now - (seq.lastTime || 0);
+      const dist = Math.hypot(x - seq.lastX, y - seq.lastY);
+      const samePointer = (seq.lastPointerType === type) || !seq.lastPointerType;
+      const continueSeq = seq.active && within < TAP_WINDOW_MS && dist < MAX_DIST_PX && samePointer && seq.sideRight === isRight;
 
-      if (isDouble) {
-        e.preventDefault();
-        e.stopPropagation();
-        const wasPlaying = !(player && player.paused);
-        const frac = x / Math.max(1, rect.width);
-        const isRight = frac >= 0.5;
-        try {
-          const cur = Number(player.currentTime || 0);
-          const next = Math.max(0, cur + (isRight ? +seekDelta : -seekDelta));
-          player.currentTime = next;
-          if (wasPlaying) { attemptPlayWithMutedFallback(); }
-        } catch {}
-        showFeedback(cx - rect.left, cy - rect.top, (isRight ? '+' : '−') + seekDelta + 's');
-        lastTapTime = 0; // reset sequence
+      if (!continueSeq) {
+        // Start a new sequence (first tap: no action)
+        seq = { active: true, lastTime: now, count: 1, sideRight: isRight, applied: 0, lastPointerType: type, lastX: x, lastY: y };
+        // 1 tap: no pulse, no label (as requested).
+        // Do not interfere with the other side label or timers.
         return;
       }
 
-      lastTapTime = now;
-      lastX = x; lastY = y; lastPointerType = type;
+      // Continue sequence: second+ taps
+      e.preventDefault();
+      e.stopPropagation();
+      seq.count += 1;
+      seq.lastTime = now;
+      seq.lastX = x; seq.lastY = y; seq.lastPointerType = type;
+
+      const total = seekDelta * (seq.count - 1); // 2 taps => 10, 3 => 20...
+      const diff = total - (seq.applied || 0);
+      const sign = seq.sideRight ? +1 : -1;
+      const wasPlaying = !(player && player.paused);
+      try {
+        const cur = Number(player.currentTime || 0);
+        const next = Math.max(0, cur + sign * diff);
+        player.currentTime = next;
+        if (wasPlaying) { attemptPlayWithMutedFallback(); }
+      } catch {}
+      seq.applied = total;
+
+      spawnPulse(x, y);
+      showAgg(seq.sideRight, (seq.sideRight ? '+' : '−') + String(total) + 's', seq.count === 2);
+      // Only when a sequence actually triggers (second tap), fade out the other side
+      if (seq.count === 2) fadeOutAgg(!seq.sideRight);
     }
 
     // Prefer PointerEvents; fall back to touchend where PointerEvents unsupported
@@ -1252,6 +1341,33 @@
     } else {
       container.addEventListener('touchend', onPointerUp, { passive: false });
     }
+  }
+
+  // Prevent iPadOS Safari fullscreen "typing not allowed" alerts by
+  // blurring focused inputs and swallowing character key events while in fullscreen.
+  function setupFullscreenTypingGuard() {
+    const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+    const blurActive = () => {
+      try {
+        const ae = document.activeElement;
+        if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) {
+          ae.blur();
+        }
+      } catch {}
+    };
+    const keyHandler = (e) => {
+      if (!isFs()) return;
+      const k = e.key || '';
+      const isChar = k.length === 1 || k === 'Unidentified' || k === 'Spacebar' || k === ' ';
+      if (isChar) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    const onFsChange = () => { if (isFs()) blurActive(); };
+    document.addEventListener('keydown', keyHandler, { capture: true });
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
   }
 
   async function uploadOne(file, relPath) {

@@ -418,6 +418,9 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   inset: 0;
   pointer-events: none;
   z-index: 4; /* above skip/next but below menus */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .lw-tap-feedback .pulse {
   position: absolute;
@@ -427,7 +430,7 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   background: radial-gradient(circle, rgba(62,166,255,0.35) 0%, rgba(62,166,255,0.18) 60%, rgba(62,166,255,0.0) 70%);
   transform: scale(0.6);
   opacity: 0.9;
-  transition: transform 450ms ease, opacity 450ms ease;
+  transition: transform 900ms ease, opacity 900ms ease;
 }
 .lw-tap-feedback .pulse.fade {
   transform: scale(10);
@@ -441,6 +444,18 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   transform: translate(-50%, -50%);
   user-select: none;
 }
+
+/* Fade animations for the accumulated tap label */
+@keyframes lw-label-fade-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes lw-label-fade-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.98); }
+}
+.lw-tap-feedback .label.fade-in { animation: lw-label-fade-in 180ms ease-out; }
+.lw-tap-feedback .label.fade-out { animation: lw-label-fade-out 220ms ease-in forwards; }
 .subs-tools input[type="range"] { 
   -webkit-appearance: none;
   appearance: none;
