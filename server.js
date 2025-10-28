@@ -14,7 +14,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const VIDEO_DIR = process.env.VIDEO_DIR || path.join(__dirname, 'media');
 const CACHE_DIR = path.join(VIDEO_DIR, '.cache');
-const CACHE_VERSION = 2; // bump to invalidate old remux outputs
+const CACHE_VERSION = 3; // bump to invalidate old remux outputs
 
 const ALLOWED_EXTS = new Set(['.mp4', '.webm', '.mkv', '.mov', '.m4v', '.avi']);
 const THUMB_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
@@ -545,6 +545,7 @@ function probe(filePath) {
         resolve({
           videoCodec: v && (v.codec_name || v.codec_long_name),
           audioCodec: a && (a.codec_name || a.codec_long_name),
+          audioChannels: a && (parseInt(a.channels, 10) || null),
           durationSec: typeof durationSec === 'number' && Number.isFinite(durationSec) ? durationSec : null,
           vStart: v && (parseFloat(v.start_time)) || 0,
           aStart: a && (parseFloat(a.start_time)) || 0,
@@ -580,6 +581,7 @@ async function ensureRemuxedMp4(filePath, relPath, codecs) {
     try {
       const vCodec = (codecs && (codecs.videoCodec || '')).toString().toLowerCase();
       const aCodec = (codecs && (codecs.audioCodec || '')).toString().toLowerCase();
+      const aCh = (codecs && Number(codecs.audioChannels)) || 0;
       const canCopyVideo = vCodec.includes('h264') || vCodec.includes('avc') || vCodec.includes('hevc') || vCodec.includes('h265') || vCodec.includes('hvc1') || vCodec.includes('hev1');
       const canCopyAudio = aCodec.includes('aac') || aCodec.includes('mp3');
       // For remuxing to a seekable MP4, use a single input and let
@@ -603,8 +605,23 @@ async function ensureRemuxedMp4(filePath, relPath, codecs) {
         cmd.videoCodec('libx264').outputOptions(['-preset', 'veryfast', '-crf', process.env.X264_CRF || '23']);
       }
 
-      if (canCopyAudio) cmd.audioCodec('copy');
-      else cmd.audioCodec('aac').audioBitrate(process.env.AAC_BITRATE || '160k');
+      if (canCopyAudio) {
+        cmd.audioCodec('copy');
+      } else {
+        // Transcode non-MP4-compatible audio (e.g., DTS/TrueHD/FLAC) to AAC.
+        // Prefer 5.1 when the source has >=6 channels (browser-compatible).
+        const preferSurround = process.env.AAC_SURROUND !== '0';
+        const wantSurround = preferSurround && aCh >= 6;
+        cmd.audioCodec('aac');
+        if (wantSurround) {
+          // Downmix to 5.1 for wide compatibility, with a higher bitrate.
+          const br = process.env.AAC_6CH_BITRATE || '384k';
+          cmd.audioChannels(6).audioBitrate(br);
+        } else {
+          const br = process.env.AAC_2CH_BITRATE || process.env.AAC_BITRATE || '192k';
+          cmd.audioChannels(2).audioBitrate(br);
+        }
+      }
 
       cmd.on('error', (err) => {
         remuxInProgress.delete(abs);
@@ -665,6 +682,7 @@ app.get('/play', async (req, res) => {
   const codecs = await probe(filePath);
   const videoCodec = (codecs && (codecs.videoCodec || '')).toString().toLowerCase();
   const audioCodec = (codecs && (codecs.audioCodec || '')).toString().toLowerCase();
+  const audioChannels = (codecs && Number(codecs.audioChannels)) || 0;
 
   // Determine strategy
   // Prefer remuxing over transcoding to avoid heavy CPU use.
@@ -734,15 +752,27 @@ app.get('/play', async (req, res) => {
     // avoid pegging the CPU too hard.
     // If a hardware encoder is available, FFmpeg may pick it when
     // mapped via environment or aliases; otherwise libx264 is used.
-    command.videoCodec('libx264').outputOptions(['-crf', process.env.X264_CRF || '26', '-tune', 'fastdecode']);
+    command.videoCodec('libx264').outputOptions(['-crf', process.env.X264_CRF || '21', '-tune', 'fastdecode']);
     const maxHeight = parseInt(process.env.MAX_HEIGHT || '1080', 10);
     if (Number.isFinite(maxHeight)) {
       // Keep aspect ratio, cap height, and let width be even (-2)
       command.outputOptions(['-vf', `scale=-2:${maxHeight}:force_original_aspect_ratio=decrease`]);
     }
   }
-  if (canCopyAudio && !forceTranscode) command.audioCodec('copy');
-  else command.audioCodec('aac').audioBitrate(process.env.AAC_BITRATE || '160k');
+  if (canCopyAudio && !forceTranscode) {
+    command.audioCodec('copy');
+  } else {
+    const preferSurround = process.env.AAC_SURROUND !== '0';
+    const wantSurround = preferSurround && audioChannels >= 6;
+    command.audioCodec('aac');
+    if (wantSurround) {
+      const br = process.env.AAC_6CH_BITRATE || '384k';
+      command.audioChannels(6).audioBitrate(br);
+    } else {
+      const br = process.env.AAC_2CH_BITRATE || process.env.AAC_BITRATE || '192k';
+      command.audioChannels(2).audioBitrate(br);
+    }
+  }
 
   const stream = command.on('error', (err) => {
     console.error('FFmpeg error:', err && err.message || err);
