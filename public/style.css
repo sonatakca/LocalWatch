@@ -118,7 +118,7 @@ body {
   background: #18202b;
 }
 .dropzone.uploading::after {
-  content: ' Uploading...';
+  content: ' Yükleniyor…';
   color: var(--accent);
 }
 
@@ -304,10 +304,14 @@ body {
 .player-container .plyr__captions,
 .plyr--fullscreen .plyr__captions {
   font-size: calc(var(--sub-size) * 1%) !important;
-  transform: translate(
-    calc(var(--sub-x) * 1%),
-    calc(var(--sub-y) * -1% - var(--sub-lift))
-  ) !important;
+  /* Use bottom anchoring for vertical offset so multi-line vs single-line
+     captions stay aligned consistently. Percentages on translateY are relative
+     to the element height (varies by number of lines), which caused drift. */
+  bottom: calc(var(--sub-y) * 1% + var(--sub-lift)) !important;
+  transform: translateX(calc(var(--sub-x) * 1%)) !important;
+  /* Restore smooth vertical motion like Plyr's default transform animation */
+  transition: bottom .4s ease-in-out, transform .4s ease-in-out !important;
+  will-change: bottom, transform;
 }
 .plyr .plyr__caption,
 .player-container .plyr__caption,
@@ -450,17 +454,18 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   user-select: none;
 }
 
-/* Fade animations for the accumulated tap label */
+/* Fade + scale animations for the accumulated tap label (fancier) */
 @keyframes lw-label-fade-in {
-  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
-  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  0%   { opacity: 0;   transform: translate(-50%, -50%) scale(0.85); }
+  60%  { opacity: 1;   transform: translate(-50%, -50%) scale(1.08); }
+  100% { opacity: 1;   transform: translate(-50%, -50%) scale(1.00); }
 }
 @keyframes lw-label-fade-out {
-  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  to   { opacity: 0; transform: translate(-50%, -50%) scale(0.98); }
+  0%   { opacity: 1;   transform: translate(-50%, -50%) scale(1.00); }
+  100% { opacity: 0;   transform: translate(-50%, -50%) scale(0.90); }
 }
-.lw-tap-feedback .label.fade-in { animation: lw-label-fade-in 180ms ease-out; }
-.lw-tap-feedback .label.fade-out { animation: lw-label-fade-out 220ms ease-in forwards; }
+.lw-tap-feedback .label.fade-in  { animation: lw-label-fade-in 260ms cubic-bezier(0.22, 1, 0.36, 1); }
+.lw-tap-feedback .label.fade-out { animation: lw-label-fade-out 240ms cubic-bezier(0.4, 0, 1, 1) forwards; }
 
 /* Episode quick controls (prev / play-pause / next) */
 .lw-ep-ctrl {
@@ -565,14 +570,33 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 .plyr--full-ui .plyr__controls .plyr__control:hover svg,
 .plyr--full-ui .plyr__controls .plyr__control:focus-visible svg,
 .plyr--full-ui .plyr__menu__container .plyr__control:hover svg {
+  /* Keep icons switching to currentColor on hover for contrast */
   fill: currentColor !important;
-  stroke: currentColor !important;
+  /* Do NOT force stroke globally; some icons (e.g., fullscreen) include an invisible
+     fill="none" path that would render as a square outline when stroked. */
 }
 
 /* Prevent clipping of icon strokes at control edges and add a hair more room */
 .plyr--full-ui .plyr__controls .plyr__control,
 .plyr--full-ui .plyr__controls .plyr__control svg { overflow: visible; }
 .plyr--full-ui .plyr__controls .plyr__control { padding-inline: 10px; }
+
+/* Fullscreen button: match other buttons (white bg + black icon on hover) */
+.plyr--full-ui .plyr__controls .plyr__control[data-plyr="fullscreen"]:hover,
+.plyr--full-ui .plyr__controls .plyr__control[data-plyr="fullscreen"]:focus-visible {
+  background: var(--plyr-color-main) !important; /* white */
+  color: #101111 !important; /* black icon */
+}
+/* Enlarge the fullscreen icon */
+.plyr__controls [data-plyr="fullscreen"] svg {
+  width: 28px !important;
+  height: 28px !important;
+}
+/* Compensate padding so the hovered white pill matches other buttons' width */
+.plyr--full-ui .plyr__controls .plyr__control[data-plyr="fullscreen"] {
+  /* Make overall button background match others (~38x32) */
+  padding: 2px 5px !important; /* 28 + (2*2) = 32 high, 28 + (2*5) = 38 wide */
+}
 
 /* Absolute positions at 1/4, 2/4, 3/4 across the video */
 .lw-ep-ctrl .ep-btn.prev {
@@ -723,7 +747,4 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   --shine-via:  #e09754;  /* highlight */
 }
 
-/* Accessibility: honor reduced motion */
-@media (prefers-reduced-motion: reduce) {
-  .shine-base::after { animation-duration: 0.01ms; animation-iteration-count: 1; }
-}
+/* Intentionally always animate (ignore prefers-reduced-motion) */

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -13,11 +13,11 @@
     <header class="topbar">
       <div class="brand shine-base shine shine-theme-copper" style="--shine-speed: 30s"data-text="LocalWatch">LocalWatch</div>
       <div class="search-wrap">
-        <input id="search" type="text" placeholder="Search your videos…" autocomplete="off" />
+        <input id="search" type="text" placeholder="Videolarda arayın…" autocomplete="off" />
       </div>
       <div class="dir-info">
-        <div id="dropzone" class="dropzone" title="Drop files or folders here">
-          Drop to add to media · Tap to pick
+        <div id="dropzone" class="dropzone" title="Dosya veya klasörleri buraya bırakın">
+          Medyaya eklemek için bırakın · Seçmek için tıklayın
           <input id="file-input" type="file" multiple webkitdirectory directory style="display:none" />
         </div>
       </div>
@@ -25,19 +25,19 @@
 
     <main class="layout">
       <aside class="sidebar">
-        <button id="collapse-btn" class="collapse-btn" title="Toggle sidebar">
+        <button id="collapse-btn" class="collapse-btn" title="Listeyi aç/kapat">
           <svg class="icon" width="18" height="18" viewBox="0 0 512 512" aria-hidden="true" focusable="false">
             <path fill="currentColor" d="M184 112c-6.6 6.6-6.6 17.4 0 24l136 136-136 136c-6.6 6.6-6.6 17.4 0 24s17.4 6.6 24 0l148-148c6.6-6.6 6.6-17.4 0-24L208 112c-6.6-6.6-17.4-6.6-24 0z"/>
           </svg>
         </button>
         <div class="sidebar-inner">
           <div class="list-header">
-            <span id="video-count">0</span> videos
+            <span id="video-count">0</span> video
           </div>
           <div id="cat-bar" class="cat-bar"></div>
           <div id="video-list" class="video-list"></div>
           <div class="hint" id="empty-hint" style="display:none">
-            Drop your video files in the top-right box or into the <code>media</code> folder.
+            Video dosyalarınızı sağ üstteki kutuya veya <code>media</code> klasörüne bırakın.
           </div>
         </div>
       </aside>
@@ -47,22 +47,22 @@
           <video id="player" playsinline controls></video>
         </div>
         <div class="now-playing">
-          <div class="title" id="now-title">Select a video to start</div>
+          <div class="title" id="now-title">İzlemek için bir video seçin</div>
           <div class="meta" id="now-meta"></div>
-          <button id="sd-toggle" class="sd-toggle" type="button" title="Subtitle settings">Subtitle settings</button>
+          <button id="sd-toggle" class="sd-toggle" type="button" title="Altyazı ayarları">Altyazı ayarları</button>
           <div class="subs-tools">
-            <span>Sub delay</span>
+            <span>Altyazı gecikmesi</span>
             <button id="sd-minus" title="-100 ms">−100</button>
             <input id="sd-value" type="number" step="50" value="0" />
             <span>ms</span>
             <button id="sd-plus" title="+100 ms">+100</button>
-            <button id="sd-reset" title="Reset subtitle delay">Reset</button>
+            <button id="sd-reset" title="Altyazı gecikmesini sıfırla">Sıfırla</button>
             <div class="sep"></div>
             <div class="sub-appearance">
-              <label>Size
+              <label>Boyut
                 <input id="sub-size" type="range" min="60" max="400" step="2" value="100" />
               </label>
-              <label>Background
+              <label>Arka plan
                 <input id="sub-bg" type="range" min="0" max="1" step="0.05" value="0.35" />
               </label>
               <label>X Offset
@@ -71,19 +71,19 @@
               <label>Y Offset
                 <input id="sub-y" type="range" min="-10" max="500" step="1" value="0" />
               </label>
-              <label>Effect
+              <label>Efekt
                 <select id="sub-effect">
-                  <option value="none">None</option>
-                  <option value="shadow" selected>Drop Shadow</option>
-                  <option value="lifted">Lifted</option>
-                  <option value="outline">Outline</option>
+                  <option value="none">Yok</option>
+                  <option value="shadow" selected>Gölgeli</option>
+                  <option value="lifted">Kabartı</option>
+                  <option value="outline">Kaplanmış</option>
                 </select>
               </label>
               <label class="switch">
                 <input id="sub-lift-toggle" type="checkbox" />
-                <span>Lift when controls visible</span>
+                <span>Plyr görünürken yükselt</span>
               </label>
-              <button id="sub-pos-reset" type="button">Reset Position</button>
+              <button id="sub-pos-reset" type="button">Konumu sıfırla</button>
             </div>
           </div>
         </div>
