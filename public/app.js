@@ -174,7 +174,8 @@
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'ep-btn ' + cls;
-        b.title = title;
+        // Avoid native OS tooltips on long hover/hold; use aria-label instead
+        if (title) b.setAttribute('aria-label', title);
         b.innerHTML = svg;
         host.appendChild(b);
         return b;
@@ -188,8 +189,16 @@
       epBtnNext.addEventListener('click', () => { try { if (activeIndex < filtered.length - 1) playIndex(activeIndex + 1); } catch {} });
       epBtnPlay.addEventListener('click', () => {
         try {
-          if (videoEl && videoEl.paused) attemptPlayWithMutedFallback();
-          else videoEl.pause();
+          const isPaused = (player && typeof player.playing === 'boolean')
+            ? !player.playing
+            : !!(videoEl && videoEl.paused);
+          if (isPaused) {
+            attemptPlayWithMutedFallback();
+          } else {
+            try { player && player.pause && player.pause(); }
+            catch {}
+            try { if (videoEl) videoEl.pause(); } catch {}
+          }
           updateEpisodeControls();
         } catch {}
       });
