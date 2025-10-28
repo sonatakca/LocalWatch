@@ -27,6 +27,12 @@
   const subLiftToggle = $('#sub-lift-toggle');
   const subPosReset = $('#sub-pos-reset');
 
+  // Inline SVG icons (rounded)
+  const svgPrev = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="14" width="6" height="36" rx="3"/><path d="M48 16 L24 32 L48 48 Z" fill="currentColor" stroke="currentColor" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+  const svgPlay = '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M26 16 L26 48 L50 32 Z" fill="currentColor" stroke="currentColor" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+  const svgPause = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="20" y="16" width="8" height="32" rx="2"/><rect x="36" y="16" width="8" height="32" rx="2"/></svg>';
+  const svgNext = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="48" y="14" width="6" height="36" rx="3"/><path d="M16 16 L40 32 L16 48 Z" fill="currentColor" stroke="currentColor" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/></svg>';
+
   const player = new Plyr(videoEl, {
     invertTime: false,
     ratio: '16:9',
@@ -173,10 +179,7 @@
         host.appendChild(b);
         return b;
       };
-      const svgPrev = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="14" width="6" height="36" rx="2"/><path d="M48 16 L24 32 L48 48 Z"/></svg>';
-      const svgPlay = '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M24 16 L24 48 L48 32 Z"/></svg>';
-      const svgPause = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="20" y="16" width="8" height="32" rx="2"/><rect x="36" y="16" width="8" height="32" rx="2"/></svg>';
-      const svgNext = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="48" y="14" width="6" height="36" rx="2"/><path d="M16 16 L40 32 L16 48 Z"/></svg>';
+      // icons provided at top-level (svgPrev, svgPlay, svgPause, svgNext)
       epBtnPrev = mkBtn('prev', 'Previous', svgPrev);
       epBtnPlay = mkBtn('playpause', 'Pause/Resume', svgPause);
       epBtnNext = mkBtn('next', 'Next', svgNext);
@@ -185,14 +188,17 @@
       epBtnNext.addEventListener('click', () => { try { if (activeIndex < filtered.length - 1) playIndex(activeIndex + 1); } catch {} });
       epBtnPlay.addEventListener('click', () => {
         try {
-          if (player && player.paused) attemptPlayWithMutedFallback();
-          else player.pause();
+          if (videoEl && videoEl.paused) attemptPlayWithMutedFallback();
+          else videoEl.pause();
           updateEpisodeControls();
         } catch {}
       });
 
       container.appendChild(host);
       epCtrlHost = host;
+
+      try { videoEl.addEventListener('play', () => updateEpisodeControls()); } catch {}
+      try { videoEl.addEventListener('pause', () => updateEpisodeControls()); } catch {}
 
       player.on('play', () => {
         updateEpisodeControls();
@@ -206,7 +212,7 @@
         try { epCtrlHost.classList.add('open'); } catch {}
       });
       player.on('controlsshown', () => { try { epCtrlHost.classList.add('open'); } catch {} });
-      player.on('controlshidden', () => { if (!player.paused) { try { epCtrlHost.classList.remove('open'); } catch {} } });
+      player.on('controlshidden', () => { if (player && player.playing) { try { epCtrlHost.classList.remove('open'); } catch {} } });
 
       updateEpisodeControls();
     } catch {}
@@ -216,13 +222,13 @@
     if (!epCtrlHost) return;
     const hasPrev = activeIndex > 0;
     const hasNext = filtered && activeIndex >= 0 && activeIndex < filtered.length - 1;
-    const paused = !!(player && player.paused);
+    const paused = (player && typeof player.playing === 'boolean')
+      ? !player.playing
+      : !!(videoEl && videoEl.paused);
     epBtnPrev && epBtnPrev.classList.toggle('hidden', !hasPrev);
     epBtnNext && epBtnNext.classList.toggle('hidden', !hasNext);
     if (epBtnPlay) {
-      epBtnPlay.innerHTML = paused
-        ? '<svg viewBox="0 0 64 64" aria-hidden="true"><path d="M24 16 L24 48 L48 32 Z"/></svg>'
-        : '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="20" y="16" width="8" height="32" rx="2"/><rect x="36" y="16" width="8" height="32" rx="2"/></svg>';
+      epBtnPlay.innerHTML = paused ? svgPlay : svgPause;
     }
   }
 
@@ -870,7 +876,7 @@
       tracks,
     };
     const time = player.currentTime || 0;
-    const paused = player.paused;
+    const paused = !!(videoEl && videoEl.paused);
     player.config.duration = currentItem.duration || null;
     player.source = source;
     try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
@@ -1415,7 +1421,7 @@
       const total = seekDelta * (seq.count - 1); // 2 taps => 10, 3 => 20...
       const diff = total - (seq.applied || 0);
       const sign = seq.sideRight ? +1 : -1;
-      const wasPlaying = !(player && player.paused);
+      const wasPlaying = !(videoEl && videoEl.paused);
       try {
         const cur = Number(player.currentTime || 0);
         const next = Math.max(0, cur + sign * diff);
