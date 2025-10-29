@@ -6,6 +6,7 @@
   const layoutEl = $('.layout');
   const sidebarEl = $('.sidebar');
   const collapseBtn = document.getElementById('collapse-btn');
+  const refreshBtn = document.getElementById('refresh-btn');
   const countEl = $('#video-count');
   const emptyHint = $('#empty-hint');
   const dropzone = document.getElementById('dropzone');
@@ -948,6 +949,16 @@
     });
     // Initialize from storage
     setSidebarCollapsed(getSidebarCollapsed());
+  }
+
+  // Manual refresh of video list
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      try { refreshBtn.disabled = true; refreshBtn.textContent = 'Yenile'; } catch {}
+      load()
+        .catch(err => { try { console.error(err); } catch {} })
+        .finally(() => { try { refreshBtn.disabled = false; refreshBtn.textContent = 'Yenile'; } catch {} });
+    });
   }
 
   async function buildTracks(relPath, delayMs) {
