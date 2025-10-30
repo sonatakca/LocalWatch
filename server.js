@@ -187,6 +187,82 @@ function movePathSync(src, dest) {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ---------------------------
+// Background Preconversion
+// ---------------------------
+// Convert/remux videos into a seekable MP4 under .cache proactively, so
+// playback never waits (except initial processing after files are added).
+
+const PRECONVERT_ENABLED = (process.env.PRECONVERT !== '0');
+const PRECONVERT_CONCURRENCY = Math.max(1, parseInt(process.env.PRECONVERT_CONCURRENCY || '1', 10) || 1);
+const PRECONVERT_SCAN_INTERVAL_MS = Math.max(10_000, parseInt(process.env.PRECONVERT_SCAN_INTERVAL_MS || '60000', 10) || 60000);
+
+const preconvertQueue = [];
+const preconvertQueuedKeys = new Set(); // key: abs:size:mtime
+let preconvertActive = 0;
+
+function keyForStat(abs) {
+  try { const st = fs.statSync(abs); return `${abs}:${st.size}:${st.mtimeMs}`; } catch { return null; }
+}
+
+function enqueuePreconvert(abs, rel) {
+  if (!PRECONVERT_ENABLED) return;
+  try {
+    const st = fs.statSync(abs);
+    const { abs: outAbs } = cachePathFor(rel, st.size, st.mtimeMs);
+    if (fs.existsSync(outAbs)) return; // already converted
+    const key = `${abs}:${st.size}:${st.mtimeMs}`;
+    if (preconvertQueuedKeys.has(key)) return;
+    preconvertQueuedKeys.add(key);
+    preconvertQueue.push({ abs, rel, key });
+    process.nextTick(runPreconvertWorker);
+  } catch {}
+}
+
+async function runPreconvertWorker() {
+  if (!PRECONVERT_ENABLED) return;
+  while (preconvertActive < PRECONVERT_CONCURRENCY && preconvertQueue.length) {
+    const task = preconvertQueue.shift();
+    if (!task) break;
+    preconvertActive++;
+    (async () => {
+      try {
+        const codecs = await probe(task.abs).catch(() => null);
+        await ensureRemuxedMp4(task.abs, task.rel, codecs || {});
+      } catch (e) {
+        try { console.error('Preconvert failed:', task.rel, e && e.message || e); } catch {}
+      } finally {
+        preconvertActive--;
+        preconvertQueuedKeys.delete(task.key);
+        if (preconvertQueue.length) setTimeout(runPreconvertWorker, 0);
+      }
+    })();
+  }
+}
+
+function scanAndEnqueuePreconvert() {
+  if (!PRECONVERT_ENABLED) return;
+  try {
+    const items = walk(VIDEO_DIR, VIDEO_DIR);
+    for (const it of items) {
+      const ext = (it.ext || '').toLowerCase();
+      // Only preconvert containers that the client would remux
+      if (ext !== '.mkv' && ext !== '.avi' && ext !== '.mov') continue;
+      try { const abs = resolveSafe(it.relPath); if (abs) enqueuePreconvert(abs, it.relPath); } catch {}
+    }
+  } catch (e) { try { console.error('Preconvert scan error:', e && e.message || e); } catch {} }
+}
+
+function startPreconvertLoop() {
+  if (!PRECONVERT_ENABLED) return;
+  // Initial scan shortly after startup to avoid blocking boot
+  setTimeout(scanAndEnqueuePreconvert, 2000);
+  // Periodic rescan for new/changed files
+  setInterval(scanAndEnqueuePreconvert, PRECONVERT_SCAN_INTERVAL_MS).unref();
+}
+
+startPreconvertLoop();
+
 // Accept raw uploads streamed to disk inside VIDEO_DIR.
 // Usage: POST /upload?p=<relative/path/in/media>
 // Body: file content (any type). Creates parent folders as needed.
@@ -236,6 +312,13 @@ app.post('/upload', (req, res) => {
           return res.status(500).json({ ok: false, error: 'stat-failed' });
         }
         res.json({ ok: true, rel: safeRel, bytes: received });
+        // Kick off background preconversion for remux-needed containers
+        try {
+          const ext = path.extname(safeRel).toLowerCase();
+          if (ext === '.mkv' || ext === '.avi' || ext === '.mov') {
+            enqueuePreconvert(dest, safeRel);
+          }
+        } catch {}
       } else {
         res.status(code).end(msg || 'Upload error');
       }
@@ -348,6 +431,15 @@ app.post('/ingest_local', express.json({ limit: '2mb' }), async (req, res) => {
 
       movePathSync(src, destAbs);
       moved.push({ src, destRel, isDir: st.isDirectory() });
+      // Preconvert files (not directories) we just ingested
+      try {
+        if (!st.isDirectory()) {
+          const ext = path.extname(destRel).toLowerCase();
+          if (ext === '.mkv' || ext === '.avi' || ext === '.mov') {
+            enqueuePreconvert(destAbs, destRel.replace(/\\+/g, '/'));
+          }
+        }
+      } catch {}
     }
 
     return res.json({ ok: true, moved });
@@ -392,6 +484,12 @@ app.post('/ingest_from_downloads', express.json({ limit: '2mb' }), async (req, r
       }
       movePathSync(src, destAbs);
       moved.push({ name, size, destRel, src });
+      try {
+        const ext = path.extname(destRel).toLowerCase();
+        if (ext === '.mkv' || ext === '.avi' || ext === '.mov') {
+          enqueuePreconvert(destAbs, destRel.replace(/\\+/g, '/'));
+        }
+      } catch {}
     }
     return res.json({ ok: true, moved, unresolved });
   } catch (e) {
