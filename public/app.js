@@ -34,6 +34,13 @@
   const svgPause = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="20" y="16" width="8" height="32" rx="2"/><rect x="36" y="16" width="8" height="32" rx="2"/></svg>';
   const svgNext = '<svg viewBox="0 0 64 64" aria-hidden="true"><rect x="48" y="14" width="6" height="36" rx="3"/><path d="M16 16 L40 32 L16 48 Z" fill="currentColor" stroke="currentColor" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/></svg>';
 
+  // Detect device capabilities for fullscreen behavior
+  const ua = navigator.userAgent || '';
+  const isIPhone = /iPhone|iPod/i.test(ua);
+  const isIPad = /iPad/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isPhone = (!isIPad) && (/Mobi|Android|iPhone|iPod/i.test(ua));
+  const preferIosNativeFullscreen = isIPhone; // force native fullscreen on iPhone
+
   const player = new Plyr(videoEl, {
     invertTime: false,
     ratio: '16:9',
@@ -41,8 +48,8 @@
     keyboard: { focused: true, global: true },
     // Do not toggle play/pause when clicking empty video area
     clickToPlay: false,
-    // Prefer element-based fullscreen so overlays render on iPad
-    fullscreen: { enabled: true, fallback: true, iosNative: false },
+    // Prefer element fullscreen on iPad/desktop; use native on iPhone
+    fullscreen: { enabled: true, fallback: true, iosNative: preferIosNativeFullscreen },
     i18n: {
       restart: 'Baştan oynat',
       rewind: 'Geri sar {seektime}s',
@@ -85,6 +92,114 @@
       'rewind', 'play', 'fast-forward','mute','volume', 'current-time','progress',  'duration',  'captions', 'pip', 'airplay', 'fullscreen'
     ],
   });
+
+  // iPhone-specific: ensure native fullscreen gets triggered reliably
+  // function setupIOSFullscreenFix() {
+  //   try {
+  //     if (!isIPhone || !videoEl || !player || !player.elements) return;
+  //     const btn = player.elements.buttons && player.elements.buttons.fullscreen;
+  //     if (!btn || btn.dataset.lwIosFsFix === '1') return;
+  //     btn.dataset.lwIosFsFix = '1';
+  //     btn.addEventListener('click', () => {
+  //       try {
+  //         const vid = videoEl;
+  //         if (vid && typeof vid.webkitEnterFullscreen === 'function') {
+  //           // If Plyr fallback toggled but didn’t enter real fullscreen, force native
+  //           const fsEl = document.fullscreenElement || document.webkitFullscreenElement || null;
+  //           if (!fsEl) vid.webkitEnterFullscreen();
+  //         }
+  //       } catch {}
+  //     }, true);
+  //   } catch {}
+  // }
+  // try { player.on && player.on('ready', setupIOSFullscreenFix); } catch {}
+  // setTimeout(setupIOSFullscreenFix, 50);
+
+  // DEV: device/orientation indicator (remove after testing)
+  (function devDeviceDebug() {
+    try {
+      const elId = 'dev-device-debug';
+      let dbg = document.getElementById(elId);
+      if (!dbg) {
+        dbg = document.createElement('div');
+        dbg.id = elId;
+        document.body.appendChild(dbg);
+      }
+      const isLandscape = () => {
+        try { return window.matchMedia && window.matchMedia('(orientation: landscape)').matches; } catch {}
+        return (window.innerWidth || 0) > (window.innerHeight || 0);
+      };
+      const update = () => {
+        const phoneStr = isPhone ? 'phone' : 'not phone';
+        const orientStr = isLandscape() ? 'sideway' : 'normal';
+        // DEV: visible text
+        dbg.textContent = `DEV: ${phoneStr}, ${orientStr}`;
+      };
+      window.addEventListener('orientationchange', update);
+      window.addEventListener('resize', update);
+      update();
+    } catch {}
+  })();
+
+  // // Auto-fullscreen on iPhone when rotating to landscape
+  // (function setupIPhoneRotateFullscreen() {
+  //   try {
+  //     if (!isIPhone || !videoEl) return;
+
+  //     let isNativeFs = false;
+  //     try {
+  //       videoEl.addEventListener('webkitbeginfullscreen', () => { isNativeFs = true; });
+  //       videoEl.addEventListener('webkitendfullscreen', () => { isNativeFs = false; });
+  //     } catch {}
+
+  //     const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement || isNativeFs);
+  //     const isLandscape = () => {
+  //       try { return window.matchMedia && window.matchMedia('(orientation: landscape)').matches; } catch {}
+  //       return (window.innerWidth || 0) > (window.innerHeight || 0);
+  //     };
+
+  //     const enterFs = () => {
+  //       try {
+  //         if (player && player.fullscreen && typeof player.fullscreen.enter === 'function') {
+  //           player.fullscreen.enter();
+  //         } else if (typeof videoEl.webkitEnterFullscreen === 'function') {
+  //           videoEl.webkitEnterFullscreen();
+  //         }
+  //       } catch {}
+  //     };
+
+  //     let rotateFsPending = false;
+
+  //     const onOrientOrResize = () => {
+  //       try {
+  //         if (!isLandscape()) { rotateFsPending = false; return; }
+  //         if (isFs()) return;
+  //         // Try immediately; if blocked and video not playing yet, arm pending
+  //         enterFs();
+  //         if (!isFs() && (videoEl.paused || videoEl.readyState < 2)) {
+  //           rotateFsPending = true;
+  //         } else {
+  //           rotateFsPending = false;
+  //         }
+  //       } catch {}
+  //     };
+
+  //     const onUserPlay = () => {
+  //       try {
+  //         if (!isLandscape()) return;
+  //         if (!rotateFsPending || isFs()) return;
+  //         enterFs();
+  //         rotateFsPending = false;
+  //       } catch {}
+  //     };
+
+  //     window.addEventListener('orientationchange', onOrientOrResize);
+  //     window.addEventListener('resize', onOrientOrResize);
+  //     videoEl.addEventListener('play', onUserPlay, true);
+  //     // Initial check
+  //     setTimeout(onOrientOrResize, 0);
+  //   } catch {}
+  // })();
 
   const isTouchEnv = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
