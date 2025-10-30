@@ -14,7 +14,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const VIDEO_DIR = process.env.VIDEO_DIR || path.join(__dirname, 'media');
 const CACHE_DIR = path.join(VIDEO_DIR, '.cache');
-const CACHE_VERSION = 3; // bump to invalidate old remux outputs
+const CACHE_VERSION = 4; // bump to invalidate old remux outputs (subtitle embedding)
 
 const ALLOWED_EXTS = new Set(['.mp4', '.webm', '.mkv', '.mov', '.m4v', '.avi']);
 const THUMB_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
@@ -226,6 +226,30 @@ function keyForStat(abs) {
   try { const st = fs.statSync(abs); return `${abs}:${st.size}:${st.mtimeMs}`; } catch { return null; }
 }
 
+// Natural episode ordering helpers for preconvert scan
+function parseSeasonEpisodeToken(text) {
+  if (!text) return null;
+  const m = String(text).match(/S(\d{1,3})E(\d{1,3})/i);
+  if (m) return { s: parseInt(m[1], 10), e: parseInt(m[2], 10) };
+  const m2 = String(text).match(/\bE(\d{1,4})\b/i); // bare E##
+  if (m2) return { s: 0, e: parseInt(m2[1], 10) };
+  return null;
+}
+function compareEpisodeNatural(a, b) {
+  const ka = parseSeasonEpisodeToken(a.name) || parseSeasonEpisodeToken(a.relPath);
+  const kb = parseSeasonEpisodeToken(b.name) || parseSeasonEpisodeToken(b.relPath);
+  if (ka && kb) {
+    if (ka.s !== kb.s) return ka.s - kb.s;
+    if (ka.e !== kb.e) return ka.e - kb.e;
+  } else if (ka && !kb) {
+    return -1;
+  } else if (!ka && kb) {
+    return 1;
+  }
+  // Fallback: natural, case-insensitive path compare
+  return a.relPath.localeCompare(b.relPath, undefined, { numeric: true, sensitivity: 'base' });
+}
+
 function enqueuePreconvert(abs, rel) {
   if (!PRECONVERT_ENABLED) return;
   try {
@@ -265,10 +289,11 @@ function scanAndEnqueuePreconvert() {
   if (!PRECONVERT_ENABLED) return;
   try {
     const items = walk(VIDEO_DIR, VIDEO_DIR);
-    for (const it of items) {
+    const toQueue = items.filter((it) => {
       const ext = (it.ext || '').toLowerCase();
-      // Only preconvert containers that the client would remux
-      if (ext !== '.mkv' && ext !== '.avi' && ext !== '.mov') continue;
+      return ext === '.mkv' || ext === '.avi' || ext === '.mov';
+    }).sort(compareEpisodeNatural);
+    for (const it of toQueue) {
       try { const abs = resolveSafe(it.relPath); if (abs) enqueuePreconvert(abs, it.relPath); } catch {}
     }
   } catch (e) { try { console.error('Preconvert scan error:', e && e.message || e); } catch {} }
@@ -696,6 +721,24 @@ async function ensureRemuxedMp4(filePath, relPath, codecs) {
     await remuxInProgress.get(abs);
     return { abs, rel };
   }
+  // Prefer to embed a text subtitle for iOS native players
+  let subToEmbed = null;
+  let subAbsPath = null;
+  let subLang = null;
+  let subTitle = null;
+  try {
+    const subs = findSubsForVideo(filePath) || [];
+    subToEmbed = subs.find(s => (s && s.lang === 'tr')) || subs[0] || null;
+    if (subToEmbed && subToEmbed.file) {
+      subAbsPath = path.resolve(path.dirname(filePath), subToEmbed.file);
+      if (!fs.existsSync(subAbsPath)) subAbsPath = null;
+      subLang = (subToEmbed.lang || 'tr').toLowerCase();
+      try { subTitle = subToEmbed.label || langLabel(subLang) || subLang.toUpperCase(); } catch { subTitle = subLang.toUpperCase(); }
+      // Prefer localized label for Turkish
+      if (subLang === 'tr') subTitle = 'Türkçe';
+    }
+  } catch {}
+
   const task = new Promise((resolve, reject) => {
     try {
       const vCodec = (codecs && (codecs.videoCodec || '')).toString().toLowerCase();
@@ -708,6 +751,19 @@ async function ensureRemuxedMp4(filePath, relPath, codecs) {
       // Using -itsoffset with dual inputs can double the delay, so
       // we avoid it here.
       const cmd = ffmpeg(filePath);
+
+      // Add external subtitle as a second input, to be embedded into MP4
+      if (subAbsPath) {
+        try {
+          console.log('Embedding subtitle:', path.basename(subAbsPath));
+          cmd.input(subAbsPath);
+          // Best-effort charset for SRT/ASS files containing non-ASCII
+          const ext = path.extname(subAbsPath).toLowerCase();
+          if (ext === '.srt' || ext === '.ass' || ext === '.ssa') {
+            cmd.inputOptions(['-sub_charenc', 'UTF-8']);
+          }
+        } catch {}
+      }
 
       cmd.inputOptions(['-err_detect', 'ignore_err'])
         .outputOptions([
@@ -740,6 +796,31 @@ async function ensureRemuxedMp4(filePath, relPath, codecs) {
           const br = process.env.AAC_2CH_BITRATE || process.env.AAC_BITRATE || '192k';
           cmd.audioChannels(2).audioBitrate(br);
         }
+      }
+
+      // Explicitly map streams, including the (optional) external subtitle
+      if (subAbsPath) {
+        cmd.outputOptions([
+          '-map', '0:v:0',
+          '-map', '0:a:0?',
+          '-map', '1:s:0?',
+          '-c:s', 'mov_text',
+          // Add metadata so iOS shows a friendly label and language (ISO 639-2 for MP4)
+          '-metadata:s:s:0', `language=${(function(l){
+            try{
+              const m={en:'eng',tr:'tur',es:'spa',fr:'fra',de:'deu',it:'ita',pt:'por',ru:'rus',ar:'ara',fa:'fas',zh:'zho',ja:'jpn',ko:'kor'};
+              l=(l||'tr').toLowerCase();
+              return m[l]||l;
+            }catch{return 'tur';}
+          })(subLang)}`,
+          '-metadata:s:s:0', `title=${subTitle || 'Subtitle'}`,
+          '-disposition:s:0', 'default',
+        ]);
+      } else {
+        cmd.outputOptions([
+          '-map', '0:v:0',
+          '-map', '0:a:0?',
+        ]);
       }
 
       cmd.on('error', (err) => {
@@ -965,7 +1046,7 @@ function parseLangFromFilename(name) {
 function langLabel(code) {
   const map = {
     en: 'English',
-    tr: 'Turkish',
+    tr: 'Türkçe',
     es: 'Spanish',
     fr: 'French',
     de: 'German',
@@ -1016,12 +1097,12 @@ function findSubsForVideo(filePath) {
       }
 
       if (matches) {
-        const lang = parseLangFromFilename(de.name) || 'en';
+        const lang = parseLangFromFilename(de.name) || 'tr';
         subs.push({ file: de.name, lang, label: langLabel(lang) });
       }
     }
-    // Sort by language for stable order (en first)
-    subs.sort((a, b) => (a.lang === 'en' ? -1 : b.lang === 'en' ? 1 : a.lang.localeCompare(b.lang)));
+    // Sort by language for stable order (tr first)
+    subs.sort((a, b) => (a.lang === 'tr' ? -1 : b.lang === 'tr' ? 1 : a.lang.localeCompare(b.lang)));
     return subs;
   } catch (e) {
     return [];
@@ -1252,6 +1333,74 @@ function shiftWebVtt(content, offsetMs) {
   });
 }
 
+// Serve subtitles as WebVTT via a friendly URL under /subs/<relative-path>
+// Example: /subs/Show/Season 4/S4E1.tr.vtt?offset_ms=100
+// - If the path resolves to a .vtt file, it is served directly (optionally time-shifted).
+// - If the path resolves to .srt/.ass/.ssa, it is converted to WebVTT on the fly.
+// Use a RegExp route to capture everything after /subs/
+app.get(/^\/subs\/(.+)$/, (req, res) => {
+  try {
+    const relAny = (req.params && (req.params[0] || '')) || '';
+    if (!relAny || typeof relAny !== 'string') return res.status(400).end('bad path');
+    const rel = relAny.replace(/\\+/g, '/').replace(/^\/+/, '');
+    let abs = resolveSafe(rel);
+    if (!abs) return res.status(404).end('not found');
+    let ext = path.extname(abs).toLowerCase();
+    let exists = fs.existsSync(abs);
+    // If requesting .vtt that doesn't exist, try common subtitle extensions and convert
+    if (!exists && ext === '.vtt') {
+      const baseNoExt = abs.slice(0, -4);
+      const tryExts = ['.srt', '.ass', '.ssa'];
+      for (const te of tryExts) {
+        const cand = baseNoExt + te;
+        if (fs.existsSync(cand)) { abs = cand; ext = te; exists = true; break; }
+      }
+    }
+    if (!exists) return res.status(404).end('not found');
+    const offsetMs = parseInt(req.query.offset_ms || '0', 10) || 0;
+    res.setHeader('Cache-Control', 'no-store');
+
+    if (ext === '.vtt') {
+      res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+      if (!offsetMs) return fs.createReadStream(abs).pipe(res);
+      try {
+        const raw = fs.readFileSync(abs, 'utf8');
+        const out = shiftWebVtt(raw, offsetMs);
+        return res.end(out);
+      } catch (e) {
+        console.error('VTT read/shift failed:', e && e.message || e);
+        return fs.createReadStream(abs).pipe(res);
+      }
+    }
+
+    if (!SUB_EXTS.has(ext)) return res.status(404).end('unsupported');
+    // Convert to WebVTT on the fly from srt/ass/ssa
+    try {
+      const args = [];
+      if (offsetMs) args.push('-itsoffset', String(offsetMs / 1000));
+      if (ext === '.srt' || ext === '.ass' || ext === '.ssa') args.push('-sub_charenc', 'UTF-8');
+      const stream = ffmpeg()
+        .input(abs)
+        .inputOptions(args)
+        .outputOptions([])
+        .format('webvtt')
+        .on('error', (err) => {
+          console.error('Subtitle convert error (/subs):', err && err.message || err);
+          try { res.status(500).end('subtitle convert failed'); } catch {}
+        })
+        .pipe();
+      res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+      stream.pipe(res);
+    } catch (e) {
+      console.error('Subtitle convert exception (/subs):', e);
+      res.status(500).end('subtitle convert failed');
+    }
+  } catch (e) {
+    console.error('subs route failed:', e);
+    res.status(500).end('error');
+  }
+});
+
 app.get('/sub', (req, res) => {
   const relPath = req.query.p;
   const fileName = req.query.f;
@@ -1323,6 +1472,82 @@ app.get('/thumb', (req, res) => {
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Persist per-device playback progress
+// Body: { deviceId: string, rel: string, t: number, started?: boolean }
+app.post('/progress', express.json({ limit: '256kb' }), (req, res) => {
+  try {
+    const body = req.body || {};
+    let deviceId = body.deviceId;
+    const rel = body.rel;
+    let t = Number(body.t);
+    const started = !!body.started;
+    if (!deviceId || typeof deviceId !== 'string') return res.status(400).json({ ok: false, error: 'bad-deviceId' });
+    if (!rel || typeof rel !== 'string') return res.status(400).json({ ok: false, error: 'bad-rel' });
+    if (!Number.isFinite(t) || t < 0) t = 0;
+
+    // Sanitize deviceId to a safe file name
+    deviceId = deviceId.replace(/[^a-zA-Z0-9_.-]+/g, '_').slice(0, 80) || 'device';
+    const dir = path.join(VIDEO_DIR, 'connectedDevicesHistory');
+    const file = path.join(dir, deviceId + '.json');
+    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+
+    const payload = { rel, t: Math.floor(t), started: !!started };
+    fs.writeFileSync(file, JSON.stringify(payload, null, 2), 'utf8');
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('progress save failed:', e && e.message || e);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+// Determine the most advanced progress across devices
+// Comparison order: season, then episode, then time (seconds)
+app.get('/progress/leader', (req, res) => {
+  try {
+    const dir = path.join(VIDEO_DIR, 'connectedDevicesHistory');
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {}
+    const records = [];
+    for (const de of entries) {
+      try {
+        if (!de.isFile()) continue;
+        if (!/\.json$/i.test(de.name)) continue;
+        const abs = path.join(dir, de.name);
+        const raw = fs.readFileSync(abs, 'utf8');
+        const j = JSON.parse(raw);
+        const rel = j && j.rel;
+        const t = Number(j && j.t);
+        if (!rel || !Number.isFinite(t)) continue;
+        const deviceId = de.name.replace(/\.json$/i, '');
+        const stat = fs.statSync(abs);
+        const mtime = Number(stat.mtimeMs || 0);
+        const tok = parseSeasonEpisodeToken(rel) || { s: 0, e: 0 };
+        records.push({ deviceId, rel, t: Math.max(0, Math.floor(t)), started: !!(j && j.started), s: tok.s, e: tok.e, mtime });
+      } catch {}
+    }
+
+    if (!records.length) return res.json({ ok: true, leader: null, count: 0 });
+
+    records.sort((a, b) => {
+      if (a.s !== b.s) return b.s - a.s; // higher season first
+      if (a.e !== b.e) return b.e - a.e; // higher episode first
+      if (a.t !== b.t) return b.t - a.t; // higher time first
+      // as a last tie-breaker, latest modification time wins
+      if (a.mtime !== b.mtime) return b.mtime - a.mtime;
+      // finally, stable by deviceId
+      return String(a.deviceId).localeCompare(String(b.deviceId));
+    });
+
+    const top = records[0];
+    return res.json({ ok: true, leader: { deviceId: top.deviceId, rel: top.rel, t: top.t, started: top.started }, count: records.length });
+  } catch (e) {
+    console.error('leader calc failed:', e && e.message || e);
+    return res.status(500).json({ ok: false });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {

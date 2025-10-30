@@ -39,6 +39,31 @@
   const isIPhone = /iPhone|iPod/i.test(ua);
   const isIPad = /iPad/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const isPhone = (!isIPad) && (/Mobi|Android|iPhone|iPod/i.test(ua));
+
+  // Device identity used for server-side progress saves
+  function deriveDefaultDeviceId() {
+    try {
+      if (isIPad) return 'iPad';
+      if (isIPhone) return 'iPhone';
+      if (/Android/i.test(ua)) return 'Android';
+      if (/Windows/i.test(ua)) return 'Laptop';
+      if (/Macintosh|Mac OS X/i.test(ua)) return 'Mac';
+    } catch {}
+    return 'Device';
+  }
+  function getDeviceId() {
+    try {
+      const key = 'LocalWatch:deviceId';
+      let id = localStorage.getItem(key);
+      if (id && typeof id === 'string' && id.trim()) return id;
+      const base = deriveDefaultDeviceId();
+      // Use base without random suffix to keep friendly names like iPad.json
+      id = base;
+      localStorage.setItem(key, id);
+      return id;
+    } catch { return deriveDefaultDeviceId(); }
+  }
+  const deviceId = getDeviceId();
   const preferIosNativeFullscreen = isIPhone; // force native fullscreen on iPhone
 
   const player = new Plyr(videoEl, {
@@ -93,6 +118,43 @@
     ],
   });
 
+  // Server-side periodic progress saving
+  let lastProgressSentAt = 0;
+  function collectProgress() {
+    try {
+      const rel = currentItem && currentItem.relPath ? currentItem.relPath : null;
+      if (!rel) return null;
+      const t = Math.floor(Number(player && player.currentTime) || Number(videoEl && videoEl.currentTime) || 0);
+      const started = !!(videoEl && (!videoEl.paused));
+      return { deviceId, rel, t, started };
+    } catch { return null; }
+  }
+  async function sendProgress(urgent) {
+    const body = collectProgress();
+    if (!body) return;
+    const now = Date.now();
+    if (!urgent && now - lastProgressSentAt < 55_000) return; // throttle ~1min
+    lastProgressSentAt = now;
+    try {
+      const json = JSON.stringify(body);
+      if (urgent && navigator.sendBeacon) {
+        const blob = new Blob([json], { type: 'application/json' });
+        navigator.sendBeacon('/progress', blob);
+        return;
+      }
+      await fetch('/progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: json,
+        keepalive: !!urgent,
+      }).catch(() => {});
+    } catch {}
+  }
+  setInterval(() => { sendProgress(false); }, 60_000);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) sendProgress(true); });
+  window.addEventListener('pagehide', () => { sendProgress(true); });
+  window.addEventListener('beforeunload', (e) => { sendProgress(true); });
+
   // iPhone-specific: ensure native fullscreen gets triggered reliably
   // function setupIOSFullscreenFix() {
   //   try {
@@ -115,31 +177,31 @@
   // try { player.on && player.on('ready', setupIOSFullscreenFix); } catch {}
   // setTimeout(setupIOSFullscreenFix, 50);
 
-  // DEV: device/orientation indicator (remove after testing)
-  (function devDeviceDebug() {
-    try {
-      const elId = 'dev-device-debug';
-      let dbg = document.getElementById(elId);
-      if (!dbg) {
-        dbg = document.createElement('div');
-        dbg.id = elId;
-        document.body.appendChild(dbg);
-      }
-      const isLandscape = () => {
-        try { return window.matchMedia && window.matchMedia('(orientation: landscape)').matches; } catch {}
-        return (window.innerWidth || 0) > (window.innerHeight || 0);
-      };
-      const update = () => {
-        const phoneStr = isPhone ? 'phone' : 'not phone';
-        const orientStr = isLandscape() ? 'sideway' : 'normal';
-        // DEV: visible text
-        dbg.textContent = `DEV: ${phoneStr}, ${orientStr}`;
-      };
-      window.addEventListener('orientationchange', update);
-      window.addEventListener('resize', update);
-      update();
-    } catch {}
-  })();
+  // // DEV: device/orientation indicator (remove after testing)
+  // (function devDeviceDebug() {
+  //   try {
+  //     const elId = 'dev-device-debug';
+  //     let dbg = document.getElementById(elId);
+  //     if (!dbg) {
+  //       dbg = document.createElement('div');
+  //       dbg.id = elId;
+  //       document.body.appendChild(dbg);
+  //     }
+  //     const isLandscape = () => {
+  //       try { return window.matchMedia && window.matchMedia('(orientation: landscape)').matches; } catch {}
+  //       return (window.innerWidth || 0) > (window.innerHeight || 0);
+  //     };
+  //     const update = () => {
+  //       const phoneStr = isPhone ? 'phone' : 'not phone';
+  //       const orientStr = isLandscape() ? 'sideway' : 'normal';
+  //       // DEV: visible text
+  //       dbg.textContent = `DEV: ${phoneStr}, ${orientStr}`;
+  //     };
+  //     window.addEventListener('orientationchange', update);
+  //     window.addEventListener('resize', update);
+  //     update();
+  //   } catch {}
+  // })();
 
   // Auto-fullscreen on iPhone when rotating to landscape
   (function setupIPhoneRotateFullscreen() {
@@ -217,25 +279,25 @@
   let nextAutoSkipSuppressed = false; // once user interacts, don't auto-skip until next appearance
   let nextAutoSkipCancelHandlers = [];
 
-  // Resume playback state (localStorage)
-  let lastResumeSaveTs = 0;
-  function resumeKey(relPath) { return `LocalWatch:resume:${relPath}`; }
-  function loadResume(relPath) {
-    try {
-      const raw = localStorage.getItem(resumeKey(relPath));
-      if (!raw) return null;
-      const j = JSON.parse(raw);
-      if (j && typeof j.t === 'number' && j.t >= 0) return j;
-    } catch {}
-    return null;
-  }
-  function saveResume(relPath, t, dur) {
-    try {
-      const data = { t: Math.max(0, Math.floor(t)), dur: dur || null, ts: Date.now() };
-      localStorage.setItem(resumeKey(relPath), JSON.stringify(data));
-    } catch {}
-  }
-  function clearResume(relPath) { try { localStorage.removeItem(resumeKey(relPath)); } catch {} }
+  // Resume playback state (localStorage) — DISABLED in favor of server-led progress
+  // let lastResumeSaveTs = 0;
+  // function resumeKey(relPath) { return `LocalWatch:resume:${relPath}`; }
+  // function loadResume(relPath) {
+  //   try {
+  //     const raw = localStorage.getItem(resumeKey(relPath));
+  //     if (!raw) return null;
+  //     const j = JSON.parse(raw);
+  //     if (j && typeof j.t === 'number' && j.t >= 0) return j;
+  //   } catch {}
+  //   return null;
+  // }
+  // function saveResume(relPath, t, dur) {
+  //   try {
+  //     const data = { t: Math.max(0, Math.floor(t)), dur: dur || null, ts: Date.now() };
+  //     localStorage.setItem(resumeKey(relPath), JSON.stringify(data));
+  //   } catch {}
+  // }
+  // function clearResume(relPath) { try { localStorage.removeItem(resumeKey(relPath)); } catch {} }
   function approxDuration() {
     const d = Number(player && player.duration) || Number(videoEl && videoEl.duration) || 0;
     if (d && Number.isFinite(d) && d > 0) return d;
@@ -924,26 +986,14 @@
     updateSkipBtnVisibility(player.currentTime || 0);
     updateNextBtnVisibility(player.currentTime || 0);
     try { updateMediaPositionState(); } catch {}
-    // Persist resume position (throttled)
-    try {
-      if (!currentRelPath) return;
-      const now = Date.now();
-      const t = Number(player.currentTime || 0);
-      // If we're in the .nextepisode span (outro), don't keep resume
-      if (nextEpAt != null && t >= Math.max(0, nextEpAt - 1)) { clearResume(currentRelPath); return; }
-      if (now - lastResumeSaveTs >= 1500) {
-        const d = approxDuration();
-        saveResume(currentRelPath, t, d || null);
-        lastResumeSaveTs = now;
-      }
-    } catch {}
+    // LocalStorage resume disabled (server-side progress is saved via /progress)
   });
   player.on('seeking', () => {
     updateSkipBtnVisibility(player.currentTime || 0);
     updateNextBtnVisibility(player.currentTime || 0);
     try { updateMediaPositionState(); } catch {}
   });
-  player.on('ended', () => { setSkipBtnVisible(false); setNextBtnVisible(false); if (currentRelPath) clearResume(currentRelPath); });
+  player.on('ended', () => { setSkipBtnVisible(false); setNextBtnVisible(false); /* local clearResume disabled */ });
   player.on('play', () => { try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'; } catch {} });
   player.on('pause', () => { try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; } catch {} });
 
@@ -963,6 +1013,7 @@
   let currentRelPath = null;
   let currentItem = null;
   let currentFolder = null;
+  let globalLeader = null; // server-wide leader progress
 
   function parseSeasonEpisode(text) {
     if (!text) return null;
@@ -1287,18 +1338,13 @@
     player.config.duration = item.duration || null;
     player.source = source;
     try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
-    // Robust resume after new source is set (handles fast metadata and fallbacks)
-    (function applyResume() {
+    // Resume using server-wide leader only
+    (function applyResumeFromLeader() {
       try {
-        const resume = loadResume(item.relPath);
-        if (!resume || typeof resume.t !== 'number' || resume.t <= 0) { attemptPlayWithMutedFallback(); return; }
-        // If saved time is within the .nextepisode span (outro), do not resume
-        if (nextEpAt != null && resume.t >= Math.max(0, nextEpAt - 1)) {
-          clearResume(item.relPath);
-          attemptPlayWithMutedFallback();
-          return;
-        }
-        const target = Math.max(0, resume.t);
+        const t = (globalLeader && globalLeader.rel === item.relPath) ? Math.max(0, Number(globalLeader.t) || 0) : 0;
+        if (!t) { attemptPlayWithMutedFallback(); return; }
+        if (nextEpAt != null && t >= Math.max(0, nextEpAt - 1)) { attemptPlayWithMutedFallback(); return; }
+        const target = t;
         let applied = false;
         const seekAndPlay = () => {
           if (applied) return;
@@ -1306,23 +1352,18 @@
           try { player.currentTime = target; } catch {}
           attemptPlayWithMutedFallback();
         };
-        // If metadata is already available, seek immediately
         try {
           if ((videoEl.readyState || 0) >= 1 && (videoEl.duration || player.duration || 0)) {
             seekAndPlay();
           }
         } catch {}
-        // Otherwise, hook events; race to first
         videoEl.addEventListener('loadedmetadata', seekAndPlay, { once: true });
         videoEl.addEventListener('canplay', seekAndPlay, { once: true });
         videoEl.addEventListener('loadeddata', seekAndPlay, { once: true });
         const onTu = () => { if (!applied && (Number(videoEl.currentTime||0) < target - 0.25)) seekAndPlay(); };
         videoEl.addEventListener('timeupdate', onTu, { once: true });
-        // Safety timeout in case events are missed
         setTimeout(seekAndPlay, 1000);
-      } catch {
-        attemptPlayWithMutedFallback();
-      }
+      } catch { attemptPlayWithMutedFallback(); }
     })();
     nowTitle.textContent = item.name.replace(/\.[^.]+$/, '');
     const durStr = item.duration ? ` • ${formatDuration(item.duration)}` : '';
@@ -1330,7 +1371,6 @@
     nowMeta.textContent = `${item.ext.replace('.', '').toUpperCase()} • ${bytesToSize(item.size)}${catLabel ? ' • ' + catLabel : ''}${durStr}`;
     highlightActive();
     currentRelPath = item.relPath;
-    try { localStorage.setItem('LocalWatch:last', item.relPath); } catch {}
 
     // Fetch skip-intro window for this item and initialize UI
     ensureSkipIntroUI();
@@ -1353,14 +1393,13 @@
         console.warn('Retrying with transcode=1 for better compatibility');
         player.source = retry;
         try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
-        // Re-apply resume for fallback source
-        (function applyResume() {
+        // Re-apply resume for fallback source using server leader
+        (function applyResumeFromLeader() {
           try {
-            const resume = loadResume(item.relPath);
-            if (!resume || typeof resume.t !== 'number' || resume.t <= 0) { attemptPlayWithMutedFallback(); return; }
-            // Respect .nextepisode span for resume decision
-            if (nextEpAt != null && resume.t >= Math.max(0, nextEpAt - 1)) { clearResume(item.relPath); attemptPlayWithMutedFallback(); return; }
-            const target = Math.max(0, resume.t);
+            const t = (globalLeader && globalLeader.rel === item.relPath) ? Math.max(0, Number(globalLeader.t) || 0) : 0;
+            if (!t) { attemptPlayWithMutedFallback(); return; }
+            if (nextEpAt != null && t >= Math.max(0, nextEpAt - 1)) { attemptPlayWithMutedFallback(); return; }
+            const target = t;
             let applied = false;
             const seekAndPlay = () => { if (applied) return; applied = true; try { player.currentTime = target; } catch {}; attemptPlayWithMutedFallback(); };
             try { if ((videoEl.readyState||0) >= 1 && (videoEl.duration||player.duration||0)) { seekAndPlay(); } } catch {}
@@ -1454,16 +1493,15 @@
     filtered = videos.slice();
     renderList(filtered);
 
-    // Restore last played if available
-    let restored = null;
-    try { restored = localStorage.getItem('LocalWatch:last'); } catch {}
-    if (restored) {
-      const idx = filtered.findIndex(v => v.relPath === restored);
-      if (idx !== -1) {
-        playIndex(idx);
-        return;
+    // Query server-wide leader progress and play it if available
+    try {
+      const lr = await fetch('/progress/leader').then(r => r.json()).catch(() => null);
+      globalLeader = lr && lr.leader ? lr.leader : null;
+      if (globalLeader && globalLeader.rel) {
+        const idx = filtered.findIndex(v => v.relPath === globalLeader.rel);
+        if (idx !== -1) { playIndex(idx); return; }
       }
-    }
+    } catch {}
     if (filtered.length) playIndex(0);
   }
 
