@@ -141,65 +141,65 @@
     } catch {}
   })();
 
-  // // Auto-fullscreen on iPhone when rotating to landscape
-  // (function setupIPhoneRotateFullscreen() {
-  //   try {
-  //     if (!isIPhone || !videoEl) return;
+  // Auto-fullscreen on iPhone when rotating to landscape
+  (function setupIPhoneRotateFullscreen() {
+    try {
+      if (!isPhone || !videoEl) return;
 
-  //     let isNativeFs = false;
-  //     try {
-  //       videoEl.addEventListener('webkitbeginfullscreen', () => { isNativeFs = true; });
-  //       videoEl.addEventListener('webkitendfullscreen', () => { isNativeFs = false; });
-  //     } catch {}
+      let isNativeFs = false;
+      try {
+        videoEl.addEventListener('webkitbeginfullscreen', () => { isNativeFs = true; });
+        videoEl.addEventListener('webkitendfullscreen', () => { isNativeFs = false; });
+      } catch {}
 
-  //     const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement || isNativeFs);
-  //     const isLandscape = () => {
-  //       try { return window.matchMedia && window.matchMedia('(orientation: landscape)').matches; } catch {}
-  //       return (window.innerWidth || 0) > (window.innerHeight || 0);
-  //     };
+      const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement || isNativeFs);
+      const isLandscape = () => {
+        try { return window.matchMedia && window.matchMedia('(orientation: landscape)').matches; } catch {}
+        return (window.innerWidth || 0) > (window.innerHeight || 0);
+      };
 
-  //     const enterFs = () => {
-  //       try {
-  //         if (player && player.fullscreen && typeof player.fullscreen.enter === 'function') {
-  //           player.fullscreen.enter();
-  //         } else if (typeof videoEl.webkitEnterFullscreen === 'function') {
-  //           videoEl.webkitEnterFullscreen();
-  //         }
-  //       } catch {}
-  //     };
+      const enterFs = () => {
+        try {
+          if (player && player.fullscreen && typeof player.fullscreen.enter === 'function') {
+            player.fullscreen.enter();
+          } else if (typeof videoEl.webkitEnterFullscreen === 'function') {
+            videoEl.webkitEnterFullscreen();
+          }
+        } catch {}
+      };
 
-  //     let rotateFsPending = false;
+      let rotateFsPending = false;
 
-  //     const onOrientOrResize = () => {
-  //       try {
-  //         if (!isLandscape()) { rotateFsPending = false; return; }
-  //         if (isFs()) return;
-  //         // Try immediately; if blocked and video not playing yet, arm pending
-  //         enterFs();
-  //         if (!isFs() && (videoEl.paused || videoEl.readyState < 2)) {
-  //           rotateFsPending = true;
-  //         } else {
-  //           rotateFsPending = false;
-  //         }
-  //       } catch {}
-  //     };
+      const onOrientOrResize = () => {
+        try {
+          if (!isLandscape()) { rotateFsPending = false; return; }
+          if (isFs()) return;
+          // Try immediately; if blocked and video not playing yet, arm pending
+          enterFs();
+          if (!isFs() && (videoEl.paused || videoEl.readyState < 2)) {
+            rotateFsPending = true;
+          } else {
+            rotateFsPending = false;
+          }
+        } catch {}
+      };
 
-  //     const onUserPlay = () => {
-  //       try {
-  //         if (!isLandscape()) return;
-  //         if (!rotateFsPending || isFs()) return;
-  //         enterFs();
-  //         rotateFsPending = false;
-  //       } catch {}
-  //     };
+      const onUserPlay = () => {
+        try {
+          if (!isLandscape()) return;
+          if (!rotateFsPending || isFs()) return;
+          enterFs();
+          rotateFsPending = false;
+        } catch {}
+      };
 
-  //     window.addEventListener('orientationchange', onOrientOrResize);
-  //     window.addEventListener('resize', onOrientOrResize);
-  //     videoEl.addEventListener('play', onUserPlay, true);
-  //     // Initial check
-  //     setTimeout(onOrientOrResize, 0);
-  //   } catch {}
-  // })();
+      window.addEventListener('orientationchange', onOrientOrResize);
+      window.addEventListener('resize', onOrientOrResize);
+      videoEl.addEventListener('play', onUserPlay, true);
+      // Initial check
+      setTimeout(onOrientOrResize, 0);
+    } catch {}
+  })();
 
   const isTouchEnv = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
