@@ -127,6 +127,96 @@
     return (currentItem && Number(currentItem.duration)) || 0;
   }
 
+  // Force Space/F/M/Arrow keys to control playback when focus is inside the player
+  function setupPlayerKeyOverrides() {
+    const container = player && player.elements && player.elements.container;
+    if (!container || container.dataset.lwKeyOverrides === '1') return;
+    container.dataset.lwKeyOverrides = '1';
+
+    const isEditable = (el) => !!(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable));
+    const isInPlayer = (el) => {
+      if (!container) return false;
+      if (!el) el = document.activeElement || null;
+      if (el && container.contains(el)) return true;
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement || null;
+      const containerIsFs = !!(container && (container === fsEl || (fsEl && container.contains(fsEl)) || (container.classList && container.classList.contains('plyr--fullscreen'))));
+      if (containerIsFs && !isEditable(el)) return true;
+      return false;
+    };
+
+    const onKeyDown = (e) => {
+      const target = e.target || document.activeElement;
+      if (!isInPlayer(target)) return;
+
+      const key = e.key || '';
+      const seekDelta = Math.max(1, Number((player && player.config && player.config.seekTime) || 10));
+      const paused = (player && typeof player.playing === 'boolean') ? !player.playing : !!(videoEl && videoEl.paused);
+      const stopAll = () => { try { e.preventDefault(); e.stopPropagation(); } catch {} };
+
+      if (key === ' ' || key === 'Spacebar') {
+        stopAll();
+        e._lwHandled = true;
+        if (paused) {
+          attemptPlayWithMutedFallback();
+        } else {
+          try { player && player.pause && player.pause(); } catch {}
+          try { videoEl && videoEl.pause && videoEl.pause(); } catch {}
+        }
+        try { updateEpisodeControls(); } catch {}
+      } else if (key === 'f' || key === 'F') {
+        stopAll();
+        e._lwHandled = true;
+        try {
+          if (player && player.fullscreen && typeof player.fullscreen.toggle === 'function') {
+            player.fullscreen.toggle();
+          } else if (container && container.requestFullscreen) {
+            if (document.fullscreenElement) document.exitFullscreen(); else container.requestFullscreen();
+          }
+        } catch {}
+      } else if (key === 'm' || key === 'M') {
+        stopAll();
+        e._lwHandled = true;
+        try {
+          const next = !(player && player.muted);
+          if (player) player.muted = next;
+          if (videoEl) { videoEl.muted = next; if (next) videoEl.setAttribute('muted', ''); else videoEl.removeAttribute('muted'); }
+        } catch {}
+      } else if (key === 'ArrowLeft' || key === 'Left') {
+        stopAll();
+        e._lwHandled = true;
+        try {
+          const cur = Number(player && player.currentTime) || 0;
+          const next = Math.max(0, cur - seekDelta);
+          player.currentTime = next;
+          showSeekFeedbackFixed(false, seekDelta);
+        } catch {}
+      } else if (key === 'ArrowRight' || key === 'Right') {
+        stopAll();
+        e._lwHandled = true;
+        try {
+          const cur = Number(player && player.currentTime) || 0;
+          const next = Math.max(0, cur + seekDelta);
+          player.currentTime = next;
+          showSeekFeedbackFixed(true, seekDelta);
+        } catch {}
+      } else {
+        return;
+      }
+    };
+
+    const onKeyUp = (e) => {
+      const target = e.target || document.activeElement;
+      if (!isInPlayer(target)) return;
+      const key = e.key || '';
+      if (key === ' ' || key === 'Spacebar') {
+        try { e.preventDefault(); e.stopPropagation(); } catch {}
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown, { capture: true });
+    document.addEventListener('keyup', onKeyUp, { capture: true });
+  }
+
   function ensureSkipIntroUI() {
     try {
       const container = player && player.elements && player.elements.container;
@@ -632,6 +722,7 @@
     ensureEpisodeControlsUI();
     updateEpisodeControls();
     try { setupEmptyClickDismiss(); } catch {}
+    try { setupPlayerKeyOverrides(); } catch {}
     try { disableDblClickFullscreen(); } catch {}
     try { setupFullscreenTypingGuard(); } catch {}
     try { setupIOSPWAFSFallback(); } catch {}
@@ -1736,6 +1827,37 @@
       if (!isFs()) return;
       const k = e.key || '';
       const isChar = k.length === 1 || k === 'Unidentified' || k === 'Spacebar' || k === ' ';
+      const container = player && player.elements && player.elements.container;
+      const t = e.target || document.activeElement;
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement || null;
+      const containerIsFs = !!(container && (container === fsEl || (fsEl && container.contains(fsEl)) || (container.classList && container.classList.contains('plyr--fullscreen'))));
+      const isEditable = !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable));
+      const inPlayer = !!(container && t && container.contains(t));
+      const inScope = (inPlayer || (containerIsFs && !isEditable));
+
+      // Handle our control keys directly in fullscreen to ensure they work
+      if (inScope && (k === ' ' || k === 'Spacebar' || k === 'f' || k === 'F' || k === 'm' || k === 'M')) {
+        if (!e._lwHandled) {
+          const paused = (player && typeof player.playing === 'boolean') ? !player.playing : !!(videoEl && videoEl.paused);
+          try {
+            if (k === ' ' || k === 'Spacebar') {
+              if (paused) { attemptPlayWithMutedFallback(); }
+              else { try { player && player.pause && player.pause(); } catch {}; try { videoEl && videoEl.pause && videoEl.pause(); } catch {} }
+              try { updateEpisodeControls(); } catch {}
+            } else if (k === 'f' || k === 'F') {
+              if (player && player.fullscreen && typeof player.fullscreen.toggle === 'function') player.fullscreen.toggle();
+              else if (container && container.requestFullscreen) { if (document.fullscreenElement) document.exitFullscreen(); else container.requestFullscreen(); }
+            } else if (k === 'm' || k === 'M') {
+              const next = !(player && player.muted);
+              if (player) player.muted = next;
+              if (videoEl) { videoEl.muted = next; if (next) videoEl.setAttribute('muted', ''); else videoEl.removeAttribute('muted'); }
+            }
+          } catch {}
+          e._lwHandled = true;
+        }
+        try { e.preventDefault(); e.stopPropagation(); } catch {}
+        return;
+      }
       if (isChar) {
         e.preventDefault();
         e.stopPropagation();
