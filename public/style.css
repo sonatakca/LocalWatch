@@ -167,27 +167,45 @@ body {
 .collapse-btn {
   position: absolute;
   top: 50%;
-  right: -15px;
+  /* right: -24px; */
+  left: 100%;
   transform: translateY(-50%);
-  width: 24px;
+  width: 2px;
   height: 48px;
   display: grid;
-  place-items: center;
+  /* place-items: center; */
+  align-items: center;
+  justify-items: start;
   background: linear-gradient(180deg, #1f1f1f, #141414);
   color: #ddd;
-  border: 0px solid #2a2a2a;
+  border: 1px solid #2a2a2a;
   border-radius: 8px;
   border-top-left-radius: 0;
   border-bottom-left-radius:0 ;
   /* box-shadow: 0 4px 16px rgba(0,0,0,.4); */
   cursor: pointer;
   z-index: 7;
+  transition: width ease 0.5s;
+  transition-delay: 1s;
 }
-.collapse-btn:hover { color: #fff; border-color: #3a3a3a; }
-/* Instantly swap arrow without animation */
-.collapse-btn .icon { transition: none; }
+.collapse-btn:hover { color: #fff; border-color: #3a3a3a;border-left-color: #2a2a2a; width: 30px; transition: width ease 0.5s; }
+
+.collapse-btn .icon {
+  --tx: -8px;  
+  --scale: 0.6; 
+
+  transform: translateX(var(--tx)) scale(var(--scale));
+  
+  transition: transform 0.3s ease;
+  transition-delay: 1s;
+}
+.collapse-btn:hover .icon {
+  --tx: 0px;
+  --scale: 1;
+  transition: transform 0.8s ease;
+  transition-delay: 0s;
+}
 .layout:not(.collapsed) .collapse-btn .icon { transform: scaleX(-1); }
-.layout.collapsed .collapse-btn .icon { transform: none; }
 
 @media (max-width: 960px) {
   .collapse-btn { display: none; }

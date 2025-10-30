@@ -87,6 +87,30 @@ function resolveSafe(relativePath) {
 
 ensureVideoDir();
 
+// Development: inject LiveReload and watch static assets for instant refresh
+// Enabled when dev dependencies (connect-livereload/livereload) are available
+// and not explicitly disabled via LIVERELOAD=0.
+try {
+  if (process.env.LIVERELOAD !== '0') {
+    // Inject the livereload script into served HTML
+    const connectLivereload = require('connect-livereload');
+    const lrPort = Number(process.env.LIVERELOAD_PORT) || 35729;
+    app.use(connectLivereload({ port: lrPort }));
+
+    // Watch the public directory and notify the browser on changes
+    const livereload = require('livereload');
+    const lrserver = livereload.createServer({
+      port: lrPort,
+      exts: ['html', 'css', 'js'],
+      delay: 100,
+    });
+    lrserver.watch([path.join(__dirname, 'public')]);
+    console.log(`LiveReload active on port ${lrPort}, watching public/`);
+  }
+} catch (e) {
+  // Dev dependencies not installed or some environments may not support this; ignore silently
+}
+
 // Optional Basic Auth for external exposure
 // Set AUTH_USER and AUTH_PASS to enable. Applies to all routes and static.
 const AUTH_USER = process.env.AUTH_USER || '';

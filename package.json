@@ -24,6 +24,8 @@
     "mime-types": "^3.0.1"
   },
   "devDependencies": {
+    "connect-livereload": "^0.6.1",
+    "livereload": "^0.10.3",
     "nodemon": "^3.1.10"
   }
 }
