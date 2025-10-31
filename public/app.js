@@ -691,6 +691,18 @@
     } catch {}
   }
 
+  // Ensure captions are enabled after (re)loading a source
+  function ensureCaptionsOnSoon() {
+    const tryEnable = () => {
+      try { if (player && typeof player.toggleCaptions === 'function') player.toggleCaptions(true); } catch {}
+    };
+    // Try immediately and shortly after to cover timing differences
+    tryEnable();
+    setTimeout(tryEnable, 0);
+    setTimeout(tryEnable, 300);
+    try { videoEl.addEventListener('loadeddata', tryEnable, { once: true }); } catch {}
+  }
+
   // Media Session integration for Bluetooth/OS controls (AirPods, lock screen, etc.)
   function setupMediaSessionControls() {
     if (!('mediaSession' in navigator)) return;
@@ -1254,6 +1266,7 @@
     const paused = !!(videoEl && videoEl.paused);
     player.config.duration = currentItem.duration || null;
     player.source = source;
+    ensureCaptionsOnSoon();
     try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
     videoEl.addEventListener('loadeddata', () => {
       try { player.currentTime = time; } catch {}
@@ -1392,6 +1405,7 @@
         };
         console.warn('Retrying with transcode=1 for better compatibility');
         player.source = retry;
+        ensureCaptionsOnSoon();
         try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
         // Re-apply resume for fallback source using server leader
         (function applyResumeFromLeader() {
