@@ -38,6 +38,7 @@
   const ua = navigator.userAgent || '';
   const isIPhone = /iPhone|iPod/i.test(ua);
   const isIPad = /iPad/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isIOS = isIPhone || isIPad;
   const isPhone = (!isIPad) && (/Mobi|Android|iPhone|iPod/i.test(ua));
 
   // Device identity used for server-side progress saves
@@ -71,6 +72,8 @@
     ratio: '16:9',
     captions: { active: true, language: 'auto' },
     keyboard: { focused: true, global: true },
+    // Keep Plyr storage on; we'll override mute on ready for non‑iOS
+    storage: { enabled: true, key: 'plyr' },
     // Do not toggle play/pause when clicking empty video area
     clickToPlay: false,
     // Prefer element fullscreen on iPad/desktop; use native on iPhone
@@ -667,6 +670,12 @@
             const msg = String((err && (err.name || err.message)) || err || '');
             if (!/NotAllowedError|Autoplay|play\(\) failed|operation is not allowed/i.test(msg)) return;
           } catch {}
+          // Only use muted autoplay fallback on iOS
+          if (!isIOS) {
+            // DEV: autoplay blocked but not forcing mute on non-iOS
+            try { console.log('DEV: autoplay blocked; not muting (non‑iOS)'); } catch {}
+            return;
+          }
           const wasMuted = !!(player && player.muted);
           try {
             if (player) player.muted = true;
@@ -676,7 +685,7 @@
           if (p2 && typeof p2.catch === 'function') { try { p2.catch(() => {}); } catch {} }
           const restore = () => {
             try { videoEl.removeEventListener('playing', restore); } catch {}
-            if (!wasMuted) {
+            if (!wasMuted && !isIOS) {
               setTimeout(() => {
                 try {
                   if (player) player.muted = false;
@@ -825,6 +834,14 @@
   // Subtitle tools live under the video (collapsible panel)
   const subsTools = document.querySelector('.subs-tools');
   const sdToggleBtn = document.getElementById('sd-toggle');
+  function ensureUnmutedIfNonIOS() {
+    try {
+      if (!isIOS) {
+        if (player) player.muted = false;
+        if (videoEl) { videoEl.muted = false; videoEl.removeAttribute('muted'); }
+      }
+    } catch {}
+  }
   function toggleSubsTools(show) {
     if (!subsTools) return;
     const want = show == null ? !subsTools.classList.contains('open') : show;
@@ -890,13 +907,16 @@
     container.appendChild(delayBtn);
 
     // Keep radios in sync when captions toggled elsewhere
-    player.on('captionsenabled', refreshCaptionRadios);
-    player.on('captionsdisabled', refreshCaptionRadios);
+    // DEV: captions state debug
+    player.on('captionsenabled', () => { try { console.log('DEV: captions enabled', { active: !!(player && player.captions && player.captions.active) }); } catch {} refreshCaptionRadios(); });
+    player.on('captionsdisabled', () => { try { console.log('DEV: captions disabled', { active: !!(player && player.captions && player.captions.active) }); } catch {} refreshCaptionRadios(); });
     refreshCaptionRadios();
   }
 
   // Try to wire on ready and whenever settings is opened
   player.on('ready', () => {
+    // Ensure non‑iOS devices start unmuted
+    ensureUnmutedIfNonIOS();
     setupSettingsMenu();
     try { setupMediaSessionControls(); } catch {}
     const controls = player.elements && player.elements.controls;
@@ -1266,6 +1286,8 @@
     const paused = !!(videoEl && videoEl.paused);
     player.config.duration = currentItem.duration || null;
     player.source = source;
+    // Ensure audio is not stuck muted on non‑iOS between source changes
+    ensureUnmutedIfNonIOS();
     ensureCaptionsOnSoon();
     try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
     videoEl.addEventListener('loadeddata', () => {
@@ -1350,6 +1372,10 @@
     // fragmented MP4 where the intrinsic duration is unknown.
     player.config.duration = item.duration || null;
     player.source = source;
+    // Ensure audio is not stuck muted on non‑iOS when switching items
+    ensureUnmutedIfNonIOS();
+    // DEV: force-enable captions on initial load of a source
+    ensureCaptionsOnSoon();
     try { updateMediaMetadataFor(item); updateMediaPositionState(); } catch {}
     // Resume using server-wide leader only
     (function applyResumeFromLeader() {
