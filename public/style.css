@@ -663,8 +663,8 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 /* Fullscreen button: match other buttons (white bg + black icon on hover) */
 .plyr--full-ui .plyr__controls .plyr__control[data-plyr="fullscreen"]:hover,
 .plyr--full-ui .plyr__controls .plyr__control[data-plyr="fullscreen"]:focus-visible {
-  background: var(--plyr-color-main) !important; /* white */
-  color: #101111 !important; /* black icon */
+  background: transparent !important; /* white */
+  color: #fff !important; /* black icon */
 }
 /* Enlarge the fullscreen icon */
 .plyr__controls [data-plyr="fullscreen"] svg {
@@ -689,7 +689,7 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 }
 .lw-ep-ctrl .ep-btn.playpause {
   position: absolute; left: 50%; top: 50%;
-  transform: translate(-100%, -100%);
+  transform: translate(-95%, -100%);
 }
 .ep-btn.playpause svg {
   width: 150px; height: 150px;
