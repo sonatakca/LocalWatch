@@ -194,11 +194,12 @@ body {
 .icon-wrapper {
   --tx: -8px; /* default slight inset */
   transform: translateX(var(--tx));
-  transition: transform 0.3s ease; /* slide duration */
+  transition: transform 0.7s ease; /* slide duration */
+  transition-delay: 0.92s;
   display: grid;
   place-items: center;
 }
-.collapse-btn:hover .icon-wrapper { --tx: 0px; }
+.collapse-btn:hover .icon-wrapper { --tx: 0px; transition-delay: 0.1s;}
 
 /* Icon handles the FLIP & FADE */
 .collapse-btn .icon {
@@ -214,6 +215,7 @@ body {
 .collapse-btn:hover .icon {
   --mag: 1;
   opacity: 1;
+  transition: opacity 1s;
   transition-delay: 0s;
 }
 /* Flip logic via variable so slide remains independent */

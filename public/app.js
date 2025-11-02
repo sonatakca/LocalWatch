@@ -924,6 +924,16 @@
           controls.appendChild(right);
         }
       }
+      // Recompute caption lift to account for two-row layouts
+      try {
+        const root = document.documentElement;
+        const s = loadSubStyle();
+        const visible = !(container && container.classList && container.classList.contains('plyr--hide-controls'));
+        const baseLiftPx = 48;
+        const isTwoRow = !!(container && (container.classList.contains('lw-layout-2') || container.classList.contains('lw-layout-3')));
+        const liftPx = Math.round(baseLiftPx * (isTwoRow ? 1.5 : 1));
+        if (s.lift && visible) root.style.setProperty('--sub-lift', liftPx + 'px'); else root.style.setProperty('--sub-lift', '0px');
+      } catch {}
     } catch {}
   }
   function refreshLayoutButtonsUI() {
@@ -1444,8 +1454,14 @@
     const apply = () => {
       const s = loadSubStyle();
       const root = document.documentElement;
-      const visible = !(player.elements && player.elements.container && player.elements.container.classList.contains('plyr--hide-controls'));
-      if (s.lift && visible) root.style.setProperty('--sub-lift', '48px');
+      const container = player && player.elements && player.elements.container;
+      const visible = !(container && container.classList && container.classList.contains('plyr--hide-controls'));
+      // Base lift for single-row controls
+      const baseLiftPx = 48;
+      // If a two-row layout is active, lift more to avoid overlap
+      const isTwoRow = !!(container && (container.classList.contains('lw-layout-2') || container.classList.contains('lw-layout-3')));
+      const liftPx = Math.round(baseLiftPx * (isTwoRow ? 1.5 : 1));
+      if (s.lift && visible) root.style.setProperty('--sub-lift', liftPx + 'px');
       else root.style.setProperty('--sub-lift', '0px');
     };
     player.on('controlsshown', apply);
