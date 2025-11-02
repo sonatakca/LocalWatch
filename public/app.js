@@ -892,6 +892,105 @@
   // Subtitle tools live under the video (collapsible panel)
   const subsTools = document.querySelector('.subs-tools');
   const sdToggleBtn = document.getElementById('sd-toggle');
+  // Layout tools (in-page, adjacent to subtitle settings)
+  let layoutTools = document.querySelector('.layout-tools');
+  let layoutToggleBtn = document.getElementById('layout-toggle');
+
+  function getSavedLayoutChoice() {
+    try { return parseInt(localStorage.getItem('LocalWatch:layout') || '1', 10) || 1; } catch { return 1; }
+  }
+  function saveLayoutChoice(n) {
+    try { localStorage.setItem('LocalWatch:layout', String(n)); } catch {}
+  }
+  function applyLayoutChoice(n) {
+    try {
+      const container = player && player.elements && player.elements.container;
+      const controls = player && player.elements && player.elements.controls;
+      if (!container) return;
+      container.classList.remove('lw-layout-1','lw-layout-2','lw-layout-3');
+      container.classList.add('lw-layout-' + (n === 2 ? '2' : n === 3 ? '3' : '1'));
+      // Ensure spacers exist to center the middle group in layout 2
+      if (n === 2 && controls) {
+        let left = controls.querySelector('.lw-flex-spacer.lw-spacer-left');
+        let right = controls.querySelector('.lw-flex-spacer.lw-spacer-right');
+        if (!left) {
+          left = document.createElement('span');
+          left.className = 'lw-flex-spacer lw-spacer-left';
+          controls.appendChild(left);
+        }
+        if (!right) {
+          right = document.createElement('span');
+          right.className = 'lw-flex-spacer lw-spacer-right';
+          controls.appendChild(right);
+        }
+      }
+    } catch {}
+  }
+  function refreshLayoutButtonsUI() {
+    try {
+      const n = getSavedLayoutChoice();
+      if (!layoutTools) return;
+      const btns = Array.from(layoutTools.querySelectorAll('button[data-layout]'));
+      btns.forEach(b => b.classList.toggle('active', parseInt(b.getAttribute('data-layout')||'0',10) === n));
+    } catch {}
+  }
+  function toggleLayoutTools(show) {
+    if (!layoutTools) return;
+    const want = show == null ? !layoutTools.classList.contains('open') : !!show;
+    layoutTools.classList.toggle('open', want);
+    if (want) refreshLayoutButtonsUI();
+  }
+  function ensureLayoutToolsUI() {
+    try {
+      // Inject button + panel if missing
+      const host = document.querySelector('.now-playing');
+      if (!host) return;
+      if (!layoutToggleBtn) {
+        const btn = document.createElement('button');
+        btn.id = 'layout-toggle';
+        btn.className = 'sd-toggle';
+        btn.type = 'button';
+        btn.title = 'Yerlesim ayarlari';
+        btn.textContent = 'Yerlesim ayarlari';
+        const after = document.getElementById('sd-toggle');
+        if (after && after.parentNode) after.parentNode.insertBefore(btn, after.nextSibling);
+        else host.appendChild(btn);
+        layoutToggleBtn = btn;
+      }
+      if (!layoutTools) {
+        const panel = document.createElement('div');
+        panel.className = 'layout-tools';
+        panel.innerHTML = '<span>Yerlesim secimi</span>'+
+          '<button data-layout="1" title="Yerleske 1">Yerleske 1</button>'+
+          '<button data-layout="2" title="Yerleske 2">Yerleske 2</button>'+
+          '<button data-layout="3" title="Yerleske 3">Yerleske 3</button>';
+        const subs = document.querySelector('.subs-tools');
+        if (subs && subs.parentNode) subs.parentNode.insertBefore(panel, subs.nextSibling);
+        else host.appendChild(panel);
+        layoutTools = panel;
+      }
+      // Wire events
+      if (layoutToggleBtn && !layoutToggleBtn._lwWired) {
+        layoutToggleBtn._lwWired = true;
+        layoutToggleBtn.addEventListener('click', () => {
+          toggleLayoutTools();
+          try { layoutTools.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch {}
+        });
+      }
+      const btns = Array.from(layoutTools.querySelectorAll('button[data-layout]'));
+      btns.forEach(b => {
+        if (b._lwWired) return;
+        b._lwWired = true;
+        b.addEventListener('click', () => {
+          const n = parseInt(b.getAttribute('data-layout')||'1',10) || 1;
+          saveLayoutChoice(n);
+          applyLayoutChoice(n);
+          refreshLayoutButtonsUI();
+        });
+      });
+      refreshLayoutButtonsUI();
+    } catch {}
+  }
   function ensureUnmutedIfNonIOS() {
     try {
       if (!isIOS) {
@@ -905,6 +1004,8 @@
     const want = show == null ? !subsTools.classList.contains('open') : show;
     subsTools.classList.toggle('open', want);
   }
+  // Initialize layout tools right away
+  ensureLayoutToolsUI();
 
   // Customize Plyr settings to use a simple Subtitles On/Off and to open
   // our subtitle delay panel (under the video) from the gear menu.
@@ -957,6 +1058,47 @@
       try { subsTools.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch {}
     });
 
+    // Layout settings (Yerleşim ayarları)
+    const layoutHeader = document.createElement('div');
+    layoutHeader.className = 'plyr__menu__heading';
+    layoutHeader.textContent = 'Yerleşim ayarları';
+
+    const layout1Btn = document.createElement('button');
+    layout1Btn.type = 'button';
+    layout1Btn.className = 'plyr__control';
+    layout1Btn.setAttribute('role', 'menuitemradio');
+    layout1Btn.textContent = 'Yerleşke 1'; // Default
+
+    const layout2Btn = document.createElement('button');
+    layout2Btn.type = 'button';
+    layout2Btn.className = 'plyr__control';
+    layout2Btn.setAttribute('role', 'menuitemradio');
+    layout2Btn.textContent = 'Yerleşke 2'; // Two rows: time-progress-duration / controls
+
+    const layout3Btn = document.createElement('button');
+    layout3Btn.type = 'button';
+    layout3Btn.className = 'plyr__control';
+    layout3Btn.setAttribute('role', 'menuitemradio');
+    layout3Btn.textContent = 'Yerleşke 3'; // Compact top, progress bottom
+
+    function getSavedLayout() {
+      try { return parseInt(localStorage.getItem('LocalWatch:layout') || '1', 10) || 1; } catch { return 1; }
+    }
+    function saveLayout(n) {
+      try { localStorage.setItem('LocalWatch:layout', String(n)); } catch {}
+    }
+    function applyLayout(n) { try { applyLayoutChoice(n); } catch {} }
+    function refreshLayoutRadios() {
+      const n = getSavedLayout();
+      layout1Btn.setAttribute('aria-checked', n === 1 ? 'true' : 'false');
+      layout2Btn.setAttribute('aria-checked', n === 2 ? 'true' : 'false');
+      layout3Btn.setAttribute('aria-checked', n === 3 ? 'true' : 'false');
+    }
+    const onPick = (n) => () => { saveLayout(n); applyLayout(n); refreshLayoutRadios(); };
+    layout1Btn.addEventListener('click', onPick(1));
+    layout2Btn.addEventListener('click', onPick(2));
+    layout3Btn.addEventListener('click', onPick(3));
+
     // Append to panel root
     const container = panel.querySelector('.plyr__menu__container') || panel;
     container.appendChild(subHeader);
@@ -964,11 +1106,38 @@
     container.appendChild(offBtn);
     container.appendChild(delayBtn);
 
+    // Insert a subtle divider
+    const divider = document.createElement('div');
+    divider.className = 'plyr__menu__divider';
+    container.appendChild(divider);
+
+    // Layout section
+    container.appendChild(layoutHeader);
+    container.appendChild(layout1Btn);
+    container.appendChild(layout2Btn);
+    container.appendChild(layout3Btn);
+
     // Keep radios in sync when captions toggled elsewhere
     // DEV: captions state debug
     player.on('captionsenabled', () => { try { console.log('DEV: captions enabled', { active: !!(player && player.captions && player.captions.active) }); } catch {} refreshCaptionRadios(); });
     player.on('captionsdisabled', () => { try { console.log('DEV: captions disabled', { active: !!(player && player.captions && player.captions.active) }); } catch {} refreshCaptionRadios(); });
     refreshCaptionRadios();
+
+    // Initialize layout selection + apply chosen layout
+    refreshLayoutRadios();
+    try {
+      const n = getSavedLayout();
+      // Defer to next tick to ensure controls DOM is fully ready
+      setTimeout(() => {
+        try {
+          const containerEl = player && player.elements && player.elements.container;
+          if (containerEl) {
+            containerEl.classList.remove('lw-layout-1', 'lw-layout-2', 'lw-layout-3');
+            containerEl.classList.add('lw-layout-' + (n === 2 ? '2' : n === 3 ? '3' : '1'));
+          }
+        } catch {}
+      }, 0);
+    } catch {}
   }
 
   // Try to wire on ready and whenever settings is opened
@@ -976,6 +1145,12 @@
     // Ensure non‑iOS devices start unmuted
     ensureUnmutedIfNonIOS();
     setupSettingsMenu();
+    try { ensureLayoutToolsUI(); } catch {}
+    // Apply saved control layout on ready
+    try {
+      const n = getSavedLayoutChoice();
+      applyLayoutChoice(n);
+    } catch {}
     try { setupMediaSessionControls(); } catch {}
     const controls = player.elements && player.elements.controls;
     const settingsBtn = controls && (controls.querySelector('button[data-plyr="settings"]') || controls.querySelector('button[aria-label="Settings"]'));
@@ -1905,7 +2080,8 @@
       seq.applied = total;
 
       spawnPulse(x, y);
-      showAgg(seq.sideRight, (seq.sideRight ? '+' : '−') + String(total) + 's', seq.count === 2);
+      // Re-animate label on every tap after the first (>= double-tap)
+      showAgg(seq.sideRight, (seq.sideRight ? '+' : '−') + String(total) + 's', seq.count >= 2);
       // Only when a sequence actually triggers (second tap), fade out the other side
       if (seq.count === 2) fadeOutAgg(!seq.sideRight);
     }

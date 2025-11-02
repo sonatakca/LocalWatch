@@ -326,18 +326,21 @@ body {
 .now-playing .title { font-size: 18px; font-weight: 700; }
 .sd-toggle { margin-top: 6px; background: #151515; color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
 .sd-toggle:hover { border-color: #3a3a3a; }
+/* Space between adjacent toggles */
+.now-playing .sd-toggle + .sd-toggle { margin-left: 8px; }
 
-.subs-tools { display: none; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 12px; background: #141414; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
-.subs-tools input { width: 90px; padding: 4px 6px; background: var(--bg-soft); border: 1px solid var(--border); color: var(--text); border-radius: 6px; }
-.subs-tools button { padding: 4px 8px; background: #151515; color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
-.subs-tools button:hover { border-color: #3a3a3a; }
+.subs-tools, .layout-tools { display: none; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 12px; background: #141414; border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.subs-tools input, .layout-tools input { width: 90px; padding: 4px 6px; background: var(--bg-soft); border: 1px solid var(--border); color: var(--text); border-radius: 6px; }
+.subs-tools button, .layout-tools button { padding: 4px 8px; background: #151515; color: var(--text); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.subs-tools button:hover, .layout-tools button:hover { border-color: #3a3a3a; }
+.layout-tools button.active { border-color: var(--accent); color: #e5f0ff; }
 .subs-tools .sep { flex-basis: 100%; height: 0; }
 .subs-tools .sub-appearance { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .subs-tools .sub-appearance label { display: grid; gap: 4px; color: var(--text); }
 .subs-tools .sub-appearance input[type="range"] { width: 160px; }
 .subs-tools .sub-appearance select { background: #151515; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
 
-.subs-tools.open { display: flex; }
+.subs-tools.open, .layout-tools.open { display: flex; }
 
 /* Caption styling via CSS variables */
 :root {
@@ -377,7 +380,7 @@ body {
 .plyr--video {
   --plyr-video-background: #000;
 }
-.plyr__controls { background: rgba(20,20,20,.8) !important; backdrop-filter: blur(6px); padding: 8px 10px !important; }
+.plyr__controls { background: rgba(20,20,20,0) !important; backdrop-filter: blur(0px); padding: 8px 10px !important; }
 /* Hide default Captions row so we can use custom On/Off */
 .plyr__menu__container [data-plyr="captions"] { display: none !important; }
 
@@ -506,15 +509,16 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 
 /* Fade + scale animations for the accumulated tap label (fancier) */
 @keyframes lw-label-fade-in {
-  0%   { opacity: 0;   transform: translate(-50%, -50%) scale(0.85); }
-  60%  { opacity: 1;   transform: translate(-50%, -50%) scale(1.08); }
+  0%   { opacity: 0;   transform: translate(-50%, -50%) scale(0); }
+  30%  { transform: translate(-50%, -50%) scale(1.5); }
+  60%  { transform: translate(-50%, -50%) scale(0.8); }
   100% { opacity: 1;   transform: translate(-50%, -50%) scale(1.00); }
 }
 @keyframes lw-label-fade-out {
-  0%   { opacity: 1;   transform: translate(-50%, -50%) scale(1.00); }
-  100% { opacity: 0;   transform: translate(-50%, -50%) scale(0.90); }
+  0%   { opacity: 1;   transform: translate(-50%, -50%); }
+  100% { opacity: 0;   transform: translate(-50%, -50%); }
 }
-.lw-tap-feedback .label.fade-in  { animation: lw-label-fade-in 260ms cubic-bezier(0.22, 1, 0.36, 1); }
+.lw-tap-feedback .label.fade-in  { animation: lw-label-fade-in 400ms cubic-bezier(0.22, 1, 0.36, 1); }
 .lw-tap-feedback .label.fade-out { animation: lw-label-fade-out 240ms cubic-bezier(0.4, 0, 1, 1) forwards; }
 
 /* Episode quick controls (prev / play-pause / next) */
@@ -799,3 +803,90 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 }
 
 /* Intentionally always animate (ignore prefers-reduced-motion) */
+
+/* --- Controls Layout Variants (LocalWatch) --- */
+/* Common tweaks for multi-row control layouts */
+.plyr__controls .plyr__time { white-space: nowrap; }
+
+/* Divider in settings menu */
+.plyr__menu__divider {
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 6px 8px;
+}
+
+/* Layout 2: Two rows
+   Row 1: current-time – progress – duration
+   Row 2: rewind – play – fast-forward – mute – volume – captions – pip – airplay – fullscreen */
+.lw-layout-2 .plyr__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.lw-layout-2 .plyr__controls::after {
+  content: "";
+  flex-basis: 100%; /* force a new row after first-row items */
+  order: 15;
+}
+.lw-layout-2 .plyr__controls > .plyr__time--current { order: 0; }
+.lw-layout-2 .plyr__controls > .plyr__progress {
+  order: 11;
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+.lw-layout-2 .plyr__controls > .plyr__time--duration { order: 12; }
+/* Second row grouping with spacers */
+.lw-layout-2 .plyr__controls > button[data-plyr="mute"] { order: 20; }
+.lw-layout-2 .plyr__controls > button[data-plyr="captions"] { order: 21; }
+.lw-layout-2 .plyr__controls > button[data-plyr="airplay"] { order: 22; }
+
+/* Flexible spacers to center the middle group */
+.plyr__controls > .lw-flex-spacer { display: none; }
+.lw-layout-2 .plyr__controls > .lw-flex-spacer { display: block; flex: 1 1 auto; min-width: 10px; }
+.lw-layout-2 .plyr__controls > .lw-flex-spacer.lw-spacer-left { order: 30; }
+
+.lw-layout-2 .plyr__controls > button[data-plyr="rewind"] { order: 40; }
+.lw-layout-2 .plyr__controls > button[data-plyr="play"] { order: 41; }
+.lw-layout-2 .plyr__controls > button[data-plyr="fast-forward"] { order: 42; }
+
+.lw-layout-2 .plyr__controls > .lw-flex-spacer.lw-spacer-right { order: 50; }
+
+.lw-layout-2 .plyr__controls > button[data-plyr="pip"] { order: 60; }
+.lw-layout-2 .plyr__controls > button[data-plyr="fullscreen"] { order: 61; }
+
+/* Hide volume slider in this layout */
+.lw-layout-2 .plyr__controls > .plyr__volume { order: 20; min-width: 0; }
+.lw-layout-2 .plyr__controls > .plyr__volume input[type="range"] { display: none !important; width: 0 !important; padding: 0 !important; margin: 0 !important; }
+
+/* Layout 3: Compact top row; progress on second row
+   Row 1 (left cluster): rewind – play – fast-forward
+   Row 1 (right cluster): mute – volume – captions – pip – airplay – fullscreen
+   Row 2: current-time – progress – duration */
+.lw-layout-3 .plyr__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.lw-layout-3 .plyr__controls::after {
+  content: "";
+  flex-basis: 100%; /* break before time/progress/duration row */
+  order: 29;
+}
+.lw-layout-3 .plyr__controls > button[data-plyr="rewind"] { order: 10; }
+.lw-layout-3 .plyr__controls > button[data-plyr="play"] { order: 11; }
+.lw-layout-3 .plyr__controls > button[data-plyr="fast-forward"] { order: 12; }
+/* Push right cluster to the end of row 1 */
+.lw-layout-3 .plyr__controls > button[data-plyr="mute"] { order: 20; margin-left: auto; }
+.lw-layout-3 .plyr__controls > .plyr__volume { order: 21; min-width: 100px; }
+.lw-layout-3 .plyr__controls > button[data-plyr="captions"] { order: 22; }
+.lw-layout-3 .plyr__controls > button[data-plyr="pip"] { order: 23; }
+.lw-layout-3 .plyr__controls > button[data-plyr="airplay"] { order: 24; }
+.lw-layout-3 .plyr__controls > button[data-plyr="fullscreen"] { order: 25; }
+.lw-layout-3 .plyr__controls > .plyr__time--current { order: 30; }
+.lw-layout-3 .plyr__controls > .plyr__progress { order: 31; flex: 1 1 auto; min-width: 160px; }
+.lw-layout-3 .plyr__controls > .plyr__time--duration { order: 32; }
+
+/* Layout 1 class exists for completeness; keep Plyr default ordering */
+.lw-layout-1 .plyr__controls { gap: 6px 10px; }
