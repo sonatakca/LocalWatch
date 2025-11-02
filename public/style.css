@@ -189,8 +189,11 @@ body {
   transition-delay: 1s;
 }
 .collapse-btn:hover,
-.collapse-btn.lw-open { color: #fff; border-color: #3a3a3a;border-left-color: #2a2a2a; width: 30px; transition: width ease 0.5s; }
-
+.collapse-btn.lw-open {  width: 30px; transition: width ease 0.5s; }
+.collapse-btn:hover {
+  border-color: #3a3a3a;border-left-color: #2a2a2a;
+  
+}
 /* Wrapper handles the SLIDE separately */
 .icon-wrapper {
   --tx: -8px; /* default slight inset */
@@ -843,8 +846,9 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 .lw-layout-2 .plyr__controls > .plyr__time--duration { order: 12; }
 /* Second row grouping with spacers */
 .lw-layout-2 .plyr__controls > button[data-plyr="mute"] { order: 20; }
-.lw-layout-2 .plyr__controls > button[data-plyr="captions"] { order: 21; }
-.lw-layout-2 .plyr__controls > button[data-plyr="airplay"] { order: 22; }
+.lw-layout-2 .plyr__controls > button[data-plyr="volume"] { order: 21; }
+.lw-layout-2 .plyr__controls > button[data-plyr="captions"] { order: 22; }
+.lw-layout-2 .plyr__controls > button[data-plyr="airplay"] { order: 23; }
 
 /* Flexible spacers to center the middle group */
 .plyr__controls > .lw-flex-spacer { display: none; }
