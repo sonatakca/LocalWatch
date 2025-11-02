@@ -388,7 +388,22 @@ body {
 .plyr--video {
   --plyr-video-background: #000;
 }
-.plyr__controls { background: rgba(20,20,20,0.5) !important; backdrop-filter: blur(2px); padding: 2vh 2vw !important; border-radius: 100px !important; margin-bottom: 2vh; margin-left: 10vw; margin-right: 10vw;}
+.plyr__controls {
+  /* Apple-like frosted glass look */
+  background: rgba(255,255,255,0.08) !important;               /* translucent tint */
+  -webkit-backdrop-filter: saturate(180%) blur(2px);           /* iOS/Safari */
+  backdrop-filter: saturate(180%) blur(2px);
+  border: 1px solid rgba(255,255,255,0.18);                     /* subtle edge */
+  box-shadow: 0 10px 30px rgba(0,0,0,0.30),                     /* soft drop */
+              inset 0 1px 0 rgba(255,255,255,0.05);             /* inner highlight */
+
+  /* Keep your sizing and pill shape */
+  padding: 2vh 2vw !important;
+  border-radius: 100px !important;
+  margin-bottom: 2vh;
+  margin-left: 10vw;
+  margin-right: 10vw;
+}
 /* Hide default Captions row so we can use custom On/Off */
 .plyr__menu__container [data-plyr="captions"] { display: none !important; }
 
