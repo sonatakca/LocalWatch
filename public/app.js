@@ -1473,6 +1473,23 @@
     player.on('pause', apply);
     player.on('play', apply);
     apply();
+
+    // Ensure lift also reacts to any "wake" interaction that shows controls
+    try {
+      const container = player && player.elements && player.elements.container;
+      if (container && container.dataset.lwLiftWired !== '1') {
+        container.dataset.lwLiftWired = '1';
+        const reapplySoon = () => { try { setTimeout(apply, 0); } catch {} };
+        container.addEventListener('pointerdown', reapplySoon, true);
+        container.addEventListener('touchstart', reapplySoon, { capture: true, passive: true });
+        container.addEventListener('click', reapplySoon, true);
+        container.addEventListener('mousemove', reapplySoon, true);
+        // Observe class changes like plyr--hide-controls being toggled
+        const mo = new MutationObserver(() => apply());
+        try { mo.observe(container, { attributes: true, attributeFilter: ['class'] }); } catch {}
+        container._lwLiftObserver = mo;
+      }
+    } catch {}
   }
 
   // Sidebar collapse/expand
