@@ -70,9 +70,10 @@
   const player = new Plyr(videoEl, {
     invertTime: false,
     ratio: '16:9',
+    autoplay: !isIOS,
     captions: { active: true, language: 'auto' },
     keyboard: { focused: true, global: true },
-    // Keep Plyr storage on; we'll override mute on ready for non‑iOS
+    // Keep Plyr storage on; we'll override mute on ready for non-iOS
     storage: { enabled: true, key: 'plyr' },
     // Do not toggle play/pause when clicking empty video area
     clickToPlay: false,
@@ -120,6 +121,7 @@
       'rewind', 'play', 'fast-forward','mute','volume', 'current-time','progress',  'duration',  'captions', 'pip', 'airplay', 'fullscreen'
     ],
   });
+  try { videoEl.autoplay = !isIOS; } catch {}
 
   // Server-side periodic progress saving
   let lastProgressSentAt = 0;
@@ -660,6 +662,26 @@
     if (resetSuppression) nextAutoSkipSuppressed = false;
   }
 
+  // Arm autoplay on first interaction for non-iOS when policy blocks autoplay
+  function armAutoPlayOnFirstInteraction() {
+    try {
+      if (window.__lw_autoPlayArmed) return;
+      window.__lw_autoPlayArmed = true;
+      const once = () => {
+        try {
+          window.removeEventListener('pointerdown', once, true);
+          window.removeEventListener('keydown', once, true);
+          window.removeEventListener('click', once, true);
+          window.__lw_autoPlayArmed = false;
+        } catch {}
+        attemptPlayWithMutedFallback();
+      };
+      window.addEventListener('pointerdown', once, { once: true, capture: true });
+      window.addEventListener('keydown', once, { once: true, capture: true });
+      window.addEventListener('click', once, { once: true, capture: true });
+    } catch {}
+  }
+
   // Attempt to start playback; if blocked by autoplay policy, retry muted then restore.
   function attemptPlayWithMutedFallback() {
     try {
@@ -672,8 +694,9 @@
           } catch {}
           // Only use muted autoplay fallback on iOS
           if (!isIOS) {
-            // DEV: autoplay blocked but not forcing mute on non-iOS
-            try { console.log('DEV: autoplay blocked; not muting (non‑iOS)'); } catch {}
+            // DEV: autoplay blocked; arm resume on first interaction (non‑iOS)
+            try { console.log('DEV: autoplay blocked; arming on first interaction (non‑iOS)'); } catch {}
+            try { armAutoPlayOnFirstInteraction(); } catch {}
             return;
           }
           const wasMuted = !!(player && player.muted);
@@ -700,16 +723,51 @@
     } catch {}
   }
 
+  // Auto play helper that skips initial auto-start on iOS page load
+  function autoPlayIfAllowed(reason) {
+    try {
+      if (isIOS && window.__lw_initializing) {
+        try { console.log('DEV: skip auto play during initial load on iOS', reason || ''); } catch {}
+        return;
+      }
+      attemptPlayWithMutedFallback();
+    } catch {}
+  }
+
   // Ensure captions are enabled after (re)loading a source
   function ensureCaptionsOnSoon() {
     const tryEnable = () => {
-      try { if (player && typeof player.toggleCaptions === 'function') player.toggleCaptions(true); } catch {}
+      try {
+        // 1) Ask Plyr to enable captions
+        if (player && typeof player.toggleCaptions === 'function') player.toggleCaptions(true);
+        // 2) Ensure a textTrack is actually set to showing (some browsers reset on src swap)
+        if (!videoEl || !videoEl.textTracks) return;
+        const tracks = Array.from(videoEl.textTracks || []);
+        if (!tracks.length) return;
+        // If any track is already showing, respect it
+        if (tracks.some(t => t && t.mode === 'showing')) return;
+        let madeShowing = false;
+        for (const t of tracks) {
+          const isCap = t && (t.kind === 'captions' || t.kind === 'subtitles');
+          if (isCap && !madeShowing) {
+            // Toggle hidden->showing to force a refresh in Blink/WebKit
+            try { t.mode = 'hidden'; } catch {}
+            try { t.mode = 'showing'; } catch {}
+            madeShowing = true;
+          } else if (t) {
+            try { t.mode = 'disabled'; } catch {}
+          }
+        }
+      } catch {}
     };
     // Try immediately and shortly after to cover timing differences
     tryEnable();
     setTimeout(tryEnable, 0);
-    setTimeout(tryEnable, 300);
+    setTimeout(tryEnable, 250);
+    setTimeout(tryEnable, 600);
+    try { videoEl.addEventListener('loadedmetadata', tryEnable, { once: true }); } catch {}
     try { videoEl.addEventListener('loadeddata', tryEnable, { once: true }); } catch {}
+    try { videoEl.addEventListener('canplay', tryEnable, { once: true }); } catch {}
   }
 
   // Media Session integration for Bluetooth/OS controls (AirPods, lock screen, etc.)
@@ -1381,15 +1439,15 @@
     (function applyResumeFromLeader() {
       try {
         const t = (globalLeader && globalLeader.rel === item.relPath) ? Math.max(0, Number(globalLeader.t) || 0) : 0;
-        if (!t) { attemptPlayWithMutedFallback(); return; }
-        if (nextEpAt != null && t >= Math.max(0, nextEpAt - 1)) { attemptPlayWithMutedFallback(); return; }
+        if (!t) { autoPlayIfAllowed('no-resume'); return; }
+        if (nextEpAt != null && t >= Math.max(0, nextEpAt - 1)) { autoPlayIfAllowed('near-end'); return; }
         const target = t;
         let applied = false;
         const seekAndPlay = () => {
           if (applied) return;
           applied = true;
           try { player.currentTime = target; } catch {}
-          attemptPlayWithMutedFallback();
+          autoPlayIfAllowed('resume-seek');
         };
         try {
           if ((videoEl.readyState || 0) >= 1 && (videoEl.duration || player.duration || 0)) {
@@ -1402,7 +1460,7 @@
         const onTu = () => { if (!applied && (Number(videoEl.currentTime||0) < target - 0.25)) seekAndPlay(); };
         videoEl.addEventListener('timeupdate', onTu, { once: true });
         setTimeout(seekAndPlay, 1000);
-      } catch { attemptPlayWithMutedFallback(); }
+      } catch { autoPlayIfAllowed('resume-error'); }
     })();
     nowTitle.textContent = item.name.replace(/\.[^.]+$/, '');
     const durStr = item.duration ? ` • ${formatDuration(item.duration)}` : '';
@@ -1437,11 +1495,11 @@
         (function applyResumeFromLeader() {
           try {
             const t = (globalLeader && globalLeader.rel === item.relPath) ? Math.max(0, Number(globalLeader.t) || 0) : 0;
-            if (!t) { attemptPlayWithMutedFallback(); return; }
-            if (nextEpAt != null && t >= Math.max(0, nextEpAt - 1)) { attemptPlayWithMutedFallback(); return; }
+            if (!t) { autoPlayIfAllowed('no-resume-fallback'); return; }
+            if (nextEpAt != null && t >= Math.max(0, nextEpAt - 1)) { autoPlayIfAllowed('near-end-fallback'); return; }
             const target = t;
             let applied = false;
-            const seekAndPlay = () => { if (applied) return; applied = true; try { player.currentTime = target; } catch {}; attemptPlayWithMutedFallback(); };
+            const seekAndPlay = () => { if (applied) return; applied = true; try { player.currentTime = target; } catch {}; autoPlayIfAllowed('resume-seek-fallback'); };
             try { if ((videoEl.readyState||0) >= 1 && (videoEl.duration||player.duration||0)) { seekAndPlay(); } } catch {}
             videoEl.addEventListener('loadedmetadata', seekAndPlay, { once: true });
             videoEl.addEventListener('canplay', seekAndPlay, { once: true });
@@ -1449,7 +1507,7 @@
             const onTu = () => { if (!applied && (Number(videoEl.currentTime||0) < target - 0.25)) seekAndPlay(); };
             videoEl.addEventListener('timeupdate', onTu, { once: true });
             setTimeout(seekAndPlay, 1000);
-          } catch { attemptPlayWithMutedFallback(); }
+          } catch { autoPlayIfAllowed('resume-error-fallback'); }
         })();
       }
       videoEl.removeEventListener('error', onError);
@@ -1534,15 +1592,17 @@
     renderList(filtered);
 
     // Query server-wide leader progress and play it if available
+    window.__lw_initializing = true;
     try {
       const lr = await fetch('/progress/leader').then(r => r.json()).catch(() => null);
       globalLeader = lr && lr.leader ? lr.leader : null;
       if (globalLeader && globalLeader.rel) {
         const idx = filtered.findIndex(v => v.relPath === globalLeader.rel);
-        if (idx !== -1) { playIndex(idx); return; }
+        if (idx !== -1) { await playIndex(idx); window.__lw_initializing = false; return; }
       }
     } catch {}
-    if (filtered.length) playIndex(0);
+    if (filtered.length) { await playIndex(0); }
+    window.__lw_initializing = false;
   }
 
   // Keyboard next/prev
