@@ -1940,26 +1940,46 @@
 
     // Aggregate labels per side (left/right) with independent timers
     const agg = {
-      left: { el: null, hideTimer: null },
-      right: { el: null, hideTimer: null },
+      left: { el: null, hideTimer: null, fadeTimer: null, cleanupHandler: null, cleanupTarget: null },
+      right: { el: null, hideTimer: null, fadeTimer: null, cleanupHandler: null, cleanupTarget: null },
     };
+
+    function cancelFadeOut(a) {
+      if (!a) return;
+      try { if (a.fadeTimer) { clearTimeout(a.fadeTimer); a.fadeTimer = null; } } catch {}
+      try {
+        if (a.cleanupHandler && a.cleanupTarget) {
+          a.cleanupTarget.removeEventListener('animationend', a.cleanupHandler);
+        }
+      } catch {}
+      a.cleanupHandler = null;
+      a.cleanupTarget = null;
+    }
+
+    function scheduleFadeOut(a) {
+      if (!a || !a.el) return;
+      cancelFadeOut(a);
+      try {
+        a.el.classList.remove('fade-in');
+        a.el.classList.add('fade-out');
+      } catch {}
+      const target = a.el;
+      const handler = () => {
+        try { target.removeEventListener('animationend', handler); } catch {}
+        try { if (a.el === target) { target.remove(); a.el = null; } } catch {}
+        a.fadeTimer = null; a.cleanupHandler = null; a.cleanupTarget = null;
+      };
+      try { target.addEventListener('animationend', handler, { once: true }); } catch {}
+      a.cleanupHandler = handler; a.cleanupTarget = target;
+      a.fadeTimer = setTimeout(handler, 400);
+    }
 
     function fadeOutAgg(sideRight) {
       const side = sideRight ? 'right' : 'left';
       const a = agg[side];
       if (!a.el) return;
       clearTimeout(a.hideTimer);
-      try {
-        a.el.classList.remove('fade-in');
-        a.el.classList.add('fade-out');
-        const toRemove = a.el;
-        const cleanup = () => { try { toRemove.remove(); } catch {} if (a.el === toRemove) a.el = null; };
-        toRemove.addEventListener('animationend', cleanup, { once: true });
-        setTimeout(cleanup, 400);
-      } catch {
-        try { a.el.remove(); } catch {}
-        a.el = null;
-      }
+      scheduleFadeOut(a);
     }
     function showAgg(sideRight, text, animateIn) {
       const side = sideRight ? 'right' : 'left';
@@ -1970,6 +1990,8 @@
         a.el = el;
         fbHost.appendChild(el);
       }
+      // If a fade-out was in progress, cancel it so we don't remove the label mid-update
+      cancelFadeOut(a);
       const rect = container.getBoundingClientRect();
       // Place label at fixed anchors (1x / 7x), but keep pulse at tap point
       const unit = rect.width / 8;
@@ -1992,17 +2014,7 @@
       clearTimeout(a.hideTimer);
       a.hideTimer = setTimeout(() => {
         if (!a.el) return;
-        try {
-          a.el.classList.remove('fade-in');
-          a.el.classList.add('fade-out');
-          const toRemove = a.el;
-          const cleanup = () => { try { toRemove.remove(); } catch {} if (a.el === toRemove) a.el = null; };
-          toRemove.addEventListener('animationend', cleanup, { once: true });
-          setTimeout(cleanup, 400);
-        } catch {
-          try { a.el.remove(); } catch {}
-          a.el = null;
-        }
+        scheduleFadeOut(a);
       }, AGG_LINGER_MS);
     }
 
@@ -2116,7 +2128,32 @@
       }
       // Persistent aggregation per side stored on the host
       if (!fbHost._lwFixedAgg) {
-        fbHost._lwFixedAgg = { left: { el: null, hideTimer: null, sum: 0, lastTs: 0 }, right: { el: null, hideTimer: null, sum: 0, lastTs: 0 } };
+        fbHost._lwFixedAgg = {
+          left: { el: null, hideTimer: null, sum: 0, lastTs: 0, fadeTimer: null, cleanupHandler: null, cleanupTarget: null },
+          right: { el: null, hideTimer: null, sum: 0, lastTs: 0, fadeTimer: null, cleanupHandler: null, cleanupTarget: null }
+        };
+      }
+
+      function cancelFadeOutFixed(a) {
+        if (!a) return;
+        try { if (a.fadeTimer) { clearTimeout(a.fadeTimer); a.fadeTimer = null; } } catch {}
+        try { if (a.cleanupHandler && a.cleanupTarget) { a.cleanupTarget.removeEventListener('animationend', a.cleanupHandler); } } catch {}
+        a.cleanupHandler = null; a.cleanupTarget = null;
+      }
+
+      function scheduleFadeOutFixed(a) {
+        if (!a || !a.el) return;
+        cancelFadeOutFixed(a);
+        try { a.el.classList.remove('fade-in'); a.el.classList.add('fade-out'); } catch {}
+        const target = a.el;
+        const handler = () => {
+          try { target.removeEventListener('animationend', handler); } catch {}
+          try { if (a.el === target) { target.remove(); a.el = null; } } catch {}
+          a.fadeTimer = null; a.cleanupHandler = null; a.cleanupTarget = null;
+        };
+        try { target.addEventListener('animationend', handler, { once: true }); } catch {}
+        a.cleanupHandler = handler; a.cleanupTarget = target;
+        a.fadeTimer = setTimeout(handler, 400);
       }
       const side = isForward ? 'right' : 'left';
       const other = isForward ? 'left' : 'right';
@@ -2151,6 +2188,7 @@
 
       // Animate in on first appearance of a new run
       try {
+        cancelFadeOutFixed(agg);
         agg.el.classList.remove('fade-out');
         agg.el.classList.remove('fade-in');
         void agg.el.offsetWidth;
@@ -2183,14 +2221,8 @@
       clearTimeout(agg.hideTimer);
       agg.hideTimer = setTimeout(() => {
         if (!agg.el) { agg.sum = 0; return; }
-        try {
-          agg.el.classList.remove('fade-in');
-          agg.el.classList.add('fade-out');
-          const toRemove = agg.el;
-          const cleanup = () => { try { toRemove.remove(); } catch {}; if (agg.el === toRemove) agg.el = null; agg.sum = 0; };
-          toRemove.addEventListener('animationend', cleanup, { once: true });
-          setTimeout(cleanup, 400);
-        } catch { agg.el = null; agg.sum = 0; }
+        scheduleFadeOutFixed(agg);
+        agg.sum = 0;
       }, 1200);
     } catch {}
   }
