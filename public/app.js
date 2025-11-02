@@ -410,7 +410,8 @@
       btn.type = 'button';
       btn.className = 'btn';
       btn.textContent = 'İntroyu Atla';
-      btn.addEventListener('click', () => {
+      const activateSkip = (e) => {
+        if (e && e.type === 'touchend') { try { e.preventDefault(); e.stopPropagation(); } catch {} }
         if (!skipIntroWindow) return;
         try {
           const t = Math.max(0, Number(skipIntroWindow.end) || 0);
@@ -418,7 +419,10 @@
           attemptPlayWithMutedFallback();
         } catch {}
         setSkipBtnVisible(false);
-      });
+      };
+      btn.addEventListener('click', activateSkip);
+      // On touchscreens (iOS), trigger immediately without relying on click synthesis
+      btn.addEventListener('touchend', activateSkip, { passive: false });
       host.appendChild(btn);
       container.appendChild(host);
       skipBtnHost = host;
@@ -442,7 +446,8 @@
       btn.type = 'button';
       btn.className = 'btn';
       btn.textContent = 'Sonraki Bölüm';
-      btn.addEventListener('click', () => {
+      const activateNext = (e) => {
+        if (e && e.type === 'touchend') { try { e.preventDefault(); e.stopPropagation(); } catch {} }
         try {
           if (activeIndex >= 0 && activeIndex < filtered.length - 1) {
             const target = activeIndex + 1;
@@ -459,7 +464,9 @@
           }
         } catch {}
         setNextBtnVisible(false);
-      });
+      };
+      btn.addEventListener('click', activateNext);
+      btn.addEventListener('touchend', activateNext, { passive: false });
       host.appendChild(btn);
       container.appendChild(host);
       nextBtnHost = host;
@@ -2166,13 +2173,13 @@
     // Prefer PointerEvents; fall back to touchend where PointerEvents unsupported
     if (window.PointerEvent) {
       container.addEventListener('pointerup', (e) => {
-        // Ignore taps on our episode controls overlay so they don't count
-        if (e.target && e.target.closest && e.target.closest('.lw-ep-ctrl')) return;
+        // Ignore taps on overlays/buttons: episode controls, skip intro, next episode
+        if (e.target && e.target.closest && (e.target.closest('.lw-ep-ctrl') || e.target.closest('.lt-skip-intro') || e.target.closest('.lt-next-episode'))) return;
         onPointerUp(e);
       }, { passive: false });
     } else {
       container.addEventListener('touchend', (e) => {
-        if (e.target && e.target.closest && e.target.closest('.lw-ep-ctrl')) return;
+        if (e.target && e.target.closest && (e.target.closest('.lw-ep-ctrl') || e.target.closest('.lt-skip-intro') || e.target.closest('.lt-next-episode'))) return;
         onPointerUp(e);
       }, { passive: false });
     }

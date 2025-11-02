@@ -391,9 +391,9 @@ body {
 .plyr__controls {
   /* Apple-like frosted glass look */
   background: rgba(255,255,255,0.08) !important;               /* translucent tint */
-  -webkit-backdrop-filter: saturate(180%) blur(2px);           /* iOS/Safari */
-  backdrop-filter: saturate(180%) blur(2px);
-  border: 1px solid rgba(255,255,255,0.18);                     /* subtle edge */
+  -webkit-backdrop-filter: saturate(180%) blur(4px);           /* iOS/Safari */
+  backdrop-filter: saturate(180%) blur(4px);
+  border: 1px solid rgba(255,255,255,0.18 );                     /* subtle edge */
   box-shadow: 0 10px 30px rgba(0,0,0,0.30),                     /* soft drop */
               inset 0 1px 0 rgba(255,255,255,0.05);             /* inner highlight */
 
@@ -401,8 +401,8 @@ body {
   padding: 2vh 2vw !important;
   border-radius: 100px !important;
   margin-bottom: 2vh;
-  margin-left: 10vw;
-  margin-right: 10vw;
+  margin-left: 20vw;
+  margin-right: 20vw;
 }
 /* Hide default Captions row so we can use custom On/Off */
 .plyr__menu__container [data-plyr="captions"] { display: none !important; }
@@ -643,7 +643,8 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 .plyr--full-ui .plyr__controls .plyr__control:focus-visible,
 .plyr--full-ui .plyr__menu__container .plyr__control:hover,
 .plyr--full-ui .plyr__controls button[aria-expanded="true"] {
-  color: #101111 !important;
+  /* color: #101111 !important; */
+  background-color: transparent;
 }
 .plyr--full-ui .plyr__controls .plyr__control:hover svg,
 .plyr--full-ui .plyr__controls .plyr__control:focus-visible svg,
@@ -869,9 +870,9 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 .lw-layout-2 .plyr__controls > .lw-flex-spacer { display: block; flex: 1 1 auto; min-width: 10px; }
 .lw-layout-2 .plyr__controls > .lw-flex-spacer.lw-spacer-left { order: 30; }
 
-.lw-layout-2 .plyr__controls > button[data-plyr="rewind"] { order: 40; }
-.lw-layout-2 .plyr__controls > button[data-plyr="play"] { order: 41; }
-.lw-layout-2 .plyr__controls > button[data-plyr="fast-forward"] { order: 42; }
+.lw-layout-2 .plyr__controls > button[data-plyr="rewind"] { order: 40; transform: translateX(-100%)}
+.lw-layout-2 .plyr__controls > button[data-plyr="play"] { order: 41; transform: translateX(-100%)}
+.lw-layout-2 .plyr__controls > button[data-plyr="fast-forward"] { order: 42; transform: translateX(-100%)}
 
 .lw-layout-2 .plyr__controls > .lw-flex-spacer.lw-spacer-right { order: 50; }
 
