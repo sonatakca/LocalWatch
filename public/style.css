@@ -388,7 +388,7 @@ body {
 .plyr--video {
   --plyr-video-background: #000;
 }
-.plyr__controls { background: rgba(20,20,20,0) !important; backdrop-filter: blur(0px); padding: 8px 10px !important; }
+.plyr__controls { background: rgba(20,20,20,0.5) !important; backdrop-filter: blur(2px); padding: 2vh 2vw !important; border-radius: 100px !important; margin-bottom: 2vh; margin-left: 10vw; margin-right: 10vw;}
 /* Hide default Captions row so we can use custom On/Off */
 .plyr__menu__container [data-plyr="captions"] { display: none !important; }
 
@@ -846,7 +846,6 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 .lw-layout-2 .plyr__controls > .plyr__time--duration { order: 12; }
 /* Second row grouping with spacers */
 .lw-layout-2 .plyr__controls > button[data-plyr="mute"] { order: 20; }
-.lw-layout-2 .plyr__controls > button[data-plyr="volume"] { order: 21; }
 .lw-layout-2 .plyr__controls > button[data-plyr="captions"] { order: 22; }
 .lw-layout-2 .plyr__controls > button[data-plyr="airplay"] { order: 23; }
 
@@ -864,9 +863,15 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 .lw-layout-2 .plyr__controls > button[data-plyr="pip"] { order: 60; }
 .lw-layout-2 .plyr__controls > button[data-plyr="fullscreen"] { order: 61; }
 
-/* Hide volume slider in this layout */
-.lw-layout-2 .plyr__controls > .plyr__volume { order: 20; min-width: 0; }
-.lw-layout-2 .plyr__controls > .plyr__volume input[type="range"] { display: none !important; width: 0 !important; padding: 0 !important; margin: 0 !important; }
+/* Show volume slider next to mute (when volume is supported) */
+.lw-layout-2:not(.plyr--no-volume):not(.lw-no-volume) .plyr__controls > .plyr__volume { order: 21; min-width: 100px; display: inline-flex; align-items: center; }
+.lw-layout-2:not(.plyr--no-volume):not(.lw-no-volume) .plyr__controls > .plyr__volume input[type="range"] { display: inline-block; width: 100px; }
+/* On iOS or when volume unsupported, hide the container to avoid gaps */
+/* iOS/no-volume: keep the mute container visible, hide only the slider */
+.lw-layout-2.plyr--no-volume .plyr__controls > .plyr__volume,
+.lw-layout-2.lw-no-volume .plyr__controls > .plyr__volume { order: 21; display: inline-flex; align-items: center; min-width: 0 !important; width: auto; }
+.lw-layout-2.plyr--no-volume .plyr__controls > .plyr__volume input[type="range"],
+.lw-layout-2.lw-no-volume .plyr__controls > .plyr__volume input[type="range"] { display: none !important; width: 0 !important; padding: 0 !important; margin: 0 !important; }
 
 /* Layout 3: Compact top row; progress on second row
    Row 1 (left cluster): rewind – play – fast-forward

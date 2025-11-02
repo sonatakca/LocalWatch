@@ -909,6 +909,10 @@
       if (!container) return;
       container.classList.remove('lw-layout-1','lw-layout-2','lw-layout-3');
       container.classList.add('lw-layout-' + (n === 2 ? '2' : n === 3 ? '3' : '1'));
+      // Ensure platform-specific class so CSS can hide volume on iOS
+      try {
+        if (isIOS) container.classList.add('lw-no-volume'); else container.classList.remove('lw-no-volume');
+      } catch {}
       // Ensure spacers exist to center the middle group in layout 2
       if (n === 2 && controls) {
         let left = controls.querySelector('.lw-flex-spacer.lw-spacer-left');
