@@ -1487,6 +1487,34 @@
     });
     // Initialize from storage
     setSidebarCollapsed(getSidebarCollapsed());
+
+    // Open the collapse button fully as soon as it’s hovered, even briefly.
+    // Keep it open at least for the duration of its open animation, then
+    // allow it to close if the pointer is not hovering anymore.
+    let lwOpenLockUntil = 0;
+    let lwOpenRemoveTimer = null;
+    const ensureRemoveScheduled = () => {
+      const now = Date.now();
+      const delay = Math.max(0, lwOpenLockUntil - now);
+      if (delay === 0) {
+        try { collapseBtn.classList.remove('lw-open'); } catch {}
+        return;
+      }
+      if (lwOpenRemoveTimer) { clearTimeout(lwOpenRemoveTimer); lwOpenRemoveTimer = null; }
+      lwOpenRemoveTimer = setTimeout(() => {
+        lwOpenRemoveTimer = null;
+        try { collapseBtn.classList.remove('lw-open'); } catch {}
+      }, delay);
+    };
+    const OPEN_MIN_HOLD_MS = 700; // matches width transition (0.5s) with small buffer
+    collapseBtn.addEventListener('pointerenter', () => {
+      try { collapseBtn.classList.add('lw-open'); } catch {}
+      lwOpenLockUntil = Date.now() + OPEN_MIN_HOLD_MS;
+      if (lwOpenRemoveTimer) { clearTimeout(lwOpenRemoveTimer); lwOpenRemoveTimer = null; }
+    });
+    collapseBtn.addEventListener('pointerleave', () => {
+      ensureRemoveScheduled();
+    });
   }
 
   // Manual refresh of video list
