@@ -26,6 +26,7 @@
   const subX = $('#sub-x');
   const subY = $('#sub-y');
   const subLiftToggle = $('#sub-lift-toggle');
+  const subFadeToggle = $('#sub-fade-toggle');
   const subPosReset = $('#sub-pos-reset');
 
   // Inline SVG icons (rounded)
@@ -122,6 +123,24 @@
     ],
   });
   try { videoEl.autoplay = !isIOS; } catch {}
+
+  const hoverZone = document.querySelector('.lw-top-hover-zone');
+  const attachHoverZone = () => {
+    try {
+      const container = player && player.elements && player.elements.container;
+      if (!container || !hoverZone) return;
+      if (hoverZone.parentElement !== container) {
+        container.insertBefore(hoverZone, container.firstChild);
+      }
+    } catch {}
+  };
+  attachHoverZone();
+  try {
+    player.on && player.on('ready', attachHoverZone);
+    player.on && player.on('enterfullscreen', attachHoverZone);
+    player.on && player.on('exitfullscreen', attachHoverZone);
+  } catch {}
+  document.addEventListener('fullscreenchange', attachHoverZone);
 
   // Server-side periodic progress saving
   let lastProgressSentAt = 0;
@@ -504,10 +523,11 @@
       epBtnPlay = mkBtn('playpause', 'Oynat/Duraklat', svgPause);
       epBtnNext = mkBtn('next', 'Sonraki', svgNext);
 
-      epBtnPrev.addEventListener('click', () => { try { if (activeIndex > 0) playIndex(activeIndex - 1); } catch {} });
-      epBtnNext.addEventListener('click', () => { try { if (activeIndex < filtered.length - 1) playIndex(activeIndex + 1); } catch {} });
+      epBtnPrev.addEventListener('click', () => { try { showButtonTapPulse(epBtnPrev); if (activeIndex > 0) playIndex(activeIndex - 1); } catch {} });
+      epBtnNext.addEventListener('click', () => { try { showButtonTapPulse(epBtnNext); if (activeIndex < filtered.length - 1) playIndex(activeIndex + 1); } catch {} });
       epBtnPlay.addEventListener('click', () => {
         try {
+          showButtonTapPulse(epBtnPlay);
           const isPaused = (player && typeof player.playing === 'boolean')
             ? !player.playing
             : !!(videoEl && videoEl.paused);
@@ -909,11 +929,72 @@
   function saveLayoutChoice(n) {
     try { localStorage.setItem('LocalWatch:layout', String(n)); } catch {}
   }
+  function rememberControlsOrder(controls) {
+    if (!controls || controls._lwOriginalChildren) return;
+    const hasWrapper = controls.querySelector('.lw-controls-top, .lw-controls-bottom');
+    if (hasWrapper) return;
+    controls._lwOriginalChildren = Array.from(controls.children);
+  }
+  function restoreControlsOrder(controls) {
+    if (!controls) return;
+    const top = controls.querySelector('.lw-controls-top');
+    const bottom = controls.querySelector('.lw-controls-bottom');
+    if (!top && !bottom) return;
+    const originals = controls._lwOriginalChildren || [];
+    const collected = new Set();
+    const collect = (node) => {
+      Array.from(node.children).forEach((child) => {
+        if (child.classList && (child.classList.contains('lw-controls-top') || child.classList.contains('lw-controls-bottom'))) {
+          collect(child);
+        } else {
+          collected.add(child);
+        }
+      });
+    };
+    collect(controls);
+    if (top) top.remove();
+    if (bottom) bottom.remove();
+    originals.forEach((el) => {
+      if (collected.has(el)) {
+        controls.appendChild(el);
+        collected.delete(el);
+      }
+    });
+    collected.forEach((el) => controls.appendChild(el));
+  }
+  function ensureLayout2TopBar(container, controls) {
+    if (!container || !controls) return;
+    if (!container.classList.contains('lw-layout-2')) return;
+    rememberControlsOrder(controls);
+    let top = controls.querySelector('.lw-controls-top');
+    let bottom = controls.querySelector('.lw-controls-bottom');
+    if (!top) {
+      top = document.createElement('div');
+      top.className = 'lw-controls-top';
+      controls.appendChild(top);
+    }
+    if (!bottom) {
+      bottom = document.createElement('div');
+      bottom.className = 'lw-controls-bottom';
+      controls.appendChild(bottom);
+    }
+    const topItems = [
+      controls.querySelector('.plyr__time--current'),
+      controls.querySelector('.plyr__progress'),
+      controls.querySelector('.plyr__time--duration'),
+    ].filter(Boolean);
+    topItems.forEach((el) => top.appendChild(el));
+    Array.from(controls.children).forEach((child) => {
+      if (child === top || child === bottom) return;
+      bottom.appendChild(child);
+    });
+  }
   function applyLayoutChoice(n) {
     try {
       const container = player && player.elements && player.elements.container;
       const controls = player && player.elements && player.elements.controls;
       if (!container) return;
+      if (controls && n !== 2) restoreControlsOrder(controls);
       container.classList.remove('lw-layout-1','lw-layout-2','lw-layout-3');
       container.classList.add('lw-layout-' + (n === 2 ? '2' : n === 3 ? '3' : '1'));
       // Ensure platform-specific class so CSS can hide volume on iOS
@@ -934,6 +1015,7 @@
           right.className = 'lw-flex-spacer lw-spacer-right';
           controls.appendChild(right);
         }
+        ensureLayout2TopBar(container, controls);
       }
       // Recompute caption lift to account for two-row layouts
       try {
@@ -1180,6 +1262,7 @@
       settingsBtn.addEventListener('click', () => setTimeout(setupSettingsMenu, 0));
     }
     wireLiftForControls();
+    try { wireSubtitleFadeEventsOnce(); attachCueChangeListeners(); updateSubtitleFadeByTime(); } catch {}
     ensureSkipIntroUI();
     ensureNextEpisodeUI();
     ensureEpisodeControlsUI();
@@ -1370,6 +1453,156 @@
     }
   }
 
+  const SUB_FADE_WINDOW_S = 0.25; // 250ms fade in/out window
+  let subFadeEnabled = false;
+  let subFadeEventsWired = false;
+  let subFadeRaf = null;
+  let subFadeObserver = null;
+  let subFadeLastHasText = false;
+  let subFadeLastChangeAt = 0; // seconds since video start or wall-clock seconds fallback
+
+  function getCaptionElement() {
+    try {
+      const el = player && player.elements && (player.elements.captions || player.elements.container && player.elements.container.querySelector('.plyr__captions'));
+      if (!el) return null;
+      return el;
+    } catch { return null; }
+  }
+  function setCaptionOpacity(cap, value) {
+    try {
+      if (cap) cap.style.opacity = value === '' ? '' : String(value);
+      const nodes = cap ? cap.querySelectorAll('.plyr__caption') : [];
+      nodes.forEach((n) => { try { n.style.opacity = value === '' ? '' : String(value); } catch {} });
+    } catch {}
+  }
+  function getActiveCue(now) {
+    try {
+      const tracks = Array.from((videoEl && videoEl.textTracks) || []);
+      for (const track of tracks) {
+        if (!track || (track.mode !== 'showing' && track.mode !== 'hidden')) continue;
+        const cues = track.activeCues;
+        if (cues && cues.length) return cues[0];
+        if (Number.isFinite(now) && track.cues && track.cues.length) {
+          for (let i = 0; i < track.cues.length; i++) {
+            const c = track.cues[i];
+            if (!c) continue;
+            const s = Number(c.startTime || 0);
+            const e = Number(c.endTime || s);
+            if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
+            if (s <= now && now < e) return c;
+          }
+        }
+      }
+    } catch {}
+    return null;
+  }
+  function ensureCaptionObserver() {
+    const cap = getCaptionElement();
+    if (!cap) return;
+    if (subFadeObserver) subFadeObserver.disconnect();
+    subFadeObserver = new MutationObserver(() => {
+      const txt = (cap.textContent || '').trim();
+      const hasText = !!txt;
+      const wall = Date.now() / 1000;
+      const t = Number(videoEl && videoEl.currentTime);
+      const ts = Number.isFinite(t) ? t : wall;
+      subFadeLastHasText = hasText;
+      subFadeLastChangeAt = ts;
+      updateSubtitleFadeByTime();
+    });
+    subFadeObserver.observe(cap, { childList: true, characterData: true, subtree: true });
+  }
+  function attachCueChangeListeners() {
+    if (!videoEl) return;
+    const tracks = Array.from(videoEl.textTracks || []);
+    tracks.forEach((track) => {
+      if (!track || track._lwFadeWired) return;
+      track._lwFadeWired = true;
+      const handler = () => updateSubtitleFadeByTime();
+      try { track.addEventListener('cuechange', handler); } catch {}
+    });
+  }
+  function wireSubtitleFadeEventsOnce() {
+    if (subFadeEventsWired) return;
+    subFadeEventsWired = true;
+    ['seeking', 'seeked', 'pause', 'play'].forEach((ev) => {
+      try { player.on(ev, () => updateSubtitleFadeByTime()); } catch {}
+    });
+    try { videoEl.addEventListener('loadedmetadata', updateSubtitleFadeByTime); } catch {}
+    try { videoEl.addEventListener('loadeddata', updateSubtitleFadeByTime); } catch {}
+    try { document.addEventListener('fullscreenchange', updateSubtitleFadeByTime); } catch {}
+  }
+  function updateSubtitleFadeByTime() {
+    const cap = getCaptionElement();
+    if (!cap) return;
+    const wallNow = Date.now() / 1000;
+    const now = Number(videoEl && videoEl.currentTime);
+    const clock = Number.isFinite(now) ? now : wallNow;
+    if (!subFadeEnabled || !videoEl) {
+      setCaptionOpacity(cap, subFadeEnabled ? '0' : '');
+      return;
+    }
+    const cue = getActiveCue(clock);
+    if (!cue || !Number.isFinite(cue.startTime) || !Number.isFinite(cue.endTime)) {
+      const hasText = !!((cap.textContent || '').trim());
+      const prevHasText = subFadeLastHasText;
+      if (hasText !== subFadeLastHasText || !subFadeLastChangeAt) {
+        subFadeLastHasText = hasText;
+        subFadeLastChangeAt = clock;
+      }
+      const dt = Math.max(0, clock - (subFadeLastChangeAt || clock));
+      const window = SUB_FADE_WINDOW_S;
+      let alpha;
+      alpha = hasText
+        ? Math.max(0, Math.min(1, dt / window))
+        : Math.max(0, Math.min(1, 1 - (dt / window)));
+      if (!hasText && !prevHasText && dt === 0) alpha = 0; // initial empty state stays hidden
+      setCaptionOpacity(cap, alpha);
+      return;
+    }
+    const start = Number(cue.startTime || 0);
+    const end = Number(cue.endTime || start);
+    const window = SUB_FADE_WINDOW_S;
+    if (end <= start) { setCaptionOpacity(cap, '1'); return; }
+    let alpha = 1;
+    if (now < start) alpha = 0;
+    else if (now >= end) alpha = 0;
+    else if (now - start < window) alpha = Math.max(0, Math.min(1, (now - start) / window));
+    else if (end - now < window) alpha = Math.max(0, Math.min(1, (end - now) / window));
+    else alpha = 1;
+    setCaptionOpacity(cap, Math.max(0, Math.min(1, alpha)));
+  }
+  function setSubtitleFadeEnabled(on) {
+    subFadeEnabled = !!on;
+    const root = document.documentElement;
+    root.classList.toggle('lw-sub-fade', subFadeEnabled);
+    if (!subFadeEnabled) {
+      const cap = getCaptionElement();
+      if (cap) setCaptionOpacity(cap, '');
+      if (subFadeObserver) { subFadeObserver.disconnect(); subFadeObserver = null; }
+      if (subFadeRaf) { cancelAnimationFrame(subFadeRaf); subFadeRaf = null; }
+      subFadeLastChangeAt = 0;
+      return;
+    }
+    try { root.style.setProperty('--sub-fade-duration', `${Math.round(SUB_FADE_WINDOW_S * 1000)}ms`); } catch {}
+    wireSubtitleFadeEventsOnce();
+    attachCueChangeListeners();
+    ensureCaptionObserver();
+    // Seed last change state based on current text
+    try {
+      const wall = Date.now() / 1000;
+      const t = Number(videoEl && videoEl.currentTime);
+      subFadeLastChangeAt = Number.isFinite(t) ? t : wall;
+      const cap = getCaptionElement();
+      subFadeLastHasText = !!(cap && (cap.textContent || '').trim());
+    } catch {}
+    const loop = () => {
+      subFadeRaf = requestAnimationFrame(loop);
+      updateSubtitleFadeByTime();
+    };
+    if (!subFadeRaf) subFadeRaf = requestAnimationFrame(loop);
+  }
+
   function loadSubStyle() {
     try {
       const j = JSON.parse(localStorage.getItem('LocalWatch:subStyle') || '{}');
@@ -1380,8 +1613,9 @@
         x: Number.isFinite(j.x) ? j.x : 0,
         y: Number.isFinite(j.y) ? j.y : 0,
         lift: !!j.lift,
+        fade: !!j.fade,
       };
-    } catch { return { size: 100, bg: 0.35, effect: 'shadow' }; }
+    } catch { return { size: 100, bg: 0.35, effect: 'shadow', x: 0, y: 0, lift: false, fade: false }; }
   }
   function saveSubStyle(style) {
     try { localStorage.setItem('LocalWatch:subStyle', JSON.stringify(style)); } catch {}
@@ -1393,6 +1627,7 @@
     root.style.setProperty('--sub-shadow', computeShadow(style.effect));
     root.style.setProperty('--sub-x', String(style.x || 0));
     root.style.setProperty('--sub-y', String(style.y || 0));
+    setSubtitleFadeEnabled(!!style.fade);
     // sub-lift handled by event based on controls visibility
   }
 
@@ -1404,6 +1639,7 @@
     if (subX) subX.value = String(s.x || 0);
     if (subY) subY.value = String(s.y || 0);
     if (subLiftToggle) subLiftToggle.checked = !!s.lift;
+    if (subFadeToggle) subFadeToggle.checked = !!s.fade;
     applySubStyle(s);
 
     function update() {
@@ -1414,6 +1650,7 @@
         x: parseInt((subX && subX.value) || '0', 10) || 0,
         y: parseInt((subY && subY.value) || '0', 10) || 0,
         lift: subLiftToggle ? !!subLiftToggle.checked : false,
+        fade: subFadeToggle ? !!subFadeToggle.checked : false,
       };
       applySubStyle(ns);
       saveSubStyle(ns);
@@ -1430,6 +1667,7 @@
     if (subX) subX.addEventListener('input', update);
     if (subY) subY.addEventListener('input', update);
     if (subLiftToggle) subLiftToggle.addEventListener('change', update);
+    if (subFadeToggle) subFadeToggle.addEventListener('change', update);
     if (subPosReset) subPosReset.addEventListener('click', () => {
       if (subX) subX.value = '0';
       if (subY) subY.value = '0';
@@ -1470,7 +1708,7 @@
       // Base lift for single-row controls
       const baseLiftPx = 48;
       // If a two-row layout is active, lift more to avoid overlap
-      const isTwoRow = !!(container && (container.classList.contains('lw-layout-2') || container.classList.contains('lw-layout-3')));
+      const isTwoRow = !!(container && container.classList.contains('lw-layout-3'));
       const liftPx = Math.round(baseLiftPx * (isTwoRow ? 1.5 : 1));
       if (s.lift && visible) root.style.setProperty('--sub-lift', liftPx + 'px');
       else root.style.setProperty('--sub-lift', '0px');
@@ -1591,6 +1829,13 @@
     const paused = !!(videoEl && videoEl.paused);
     player.config.duration = currentItem.duration || null;
     player.source = source;
+    if (subFadeEnabled) {
+      attachCueChangeListeners();
+      ensureCaptionObserver();
+      setTimeout(attachCueChangeListeners, 0);
+      setTimeout(attachCueChangeListeners, 400);
+      setTimeout(updateSubtitleFadeByTime, 20);
+    }
     // Ensure audio is not stuck muted on non‑iOS between source changes
     ensureUnmutedIfNonIOS();
     ensureCaptionsOnSoon();
@@ -1677,6 +1922,13 @@
     // fragmented MP4 where the intrinsic duration is unknown.
     player.config.duration = item.duration || null;
     player.source = source;
+    if (subFadeEnabled) {
+      attachCueChangeListeners();
+      ensureCaptionObserver();
+      setTimeout(attachCueChangeListeners, 0);
+      setTimeout(attachCueChangeListeners, 400);
+      setTimeout(updateSubtitleFadeByTime, 20);
+    }
     // Ensure audio is not stuck muted on non‑iOS when switching items
     ensureUnmutedIfNonIOS();
     // DEV: force-enable captions on initial load of a source
@@ -1992,6 +2244,35 @@
     });
   }
 
+  function showButtonTapPulse(btn) {
+    try {
+      const container = (player && player.elements && player.elements.container) || document.querySelector('.player-container');
+      if (!container || !btn) return;
+      let fbHost = container.querySelector('.lw-tap-feedback');
+      if (!fbHost) {
+        fbHost = document.createElement('div');
+        fbHost.className = 'lw-tap-feedback';
+        container.appendChild(fbHost);
+      }
+      let target = btn;
+      if (btn.classList && btn.classList.contains('playpause')) {
+        const innerSvg = (btn.tagName && btn.tagName.toLowerCase() === 'svg') ? btn : btn.querySelector('svg');
+        if (innerSvg) target = innerSvg;
+      }
+      const rect = container.getBoundingClientRect();
+      const b = target.getBoundingClientRect();
+      const x = (b.left - rect.left) + (b.width / 2);
+      const y = (b.top - rect.top) + (b.height / 2);
+      const pulse = document.createElement('div');
+      pulse.className = 'pulse';
+      pulse.style.left = `${x}px`;
+      pulse.style.top = `${y}px`;
+      fbHost.appendChild(pulse);
+      requestAnimationFrame(() => { pulse.classList.add('fade'); });
+      setTimeout(() => { try { pulse.remove(); } catch {} }, 900);
+    } catch {}
+  }
+
   // Touch-friendly gestures: YouTube-style multi‑tap seek on left/right.
   // 1 tap = no action; 2 taps = 10s; 3 taps = 20s; n taps = 10*(n-1)s.
   function ensureTapGestures() {
@@ -2000,9 +2281,12 @@
     container.dataset.lwTapWired = '1';
 
     // Feedback overlay host
-    const fbHost = document.createElement('div');
-    fbHost.className = 'lw-tap-feedback';
-    container.appendChild(fbHost);
+    let fbHost = container.querySelector('.lw-tap-feedback');
+    if (!fbHost) {
+      fbHost = document.createElement('div');
+      fbHost.className = 'lw-tap-feedback';
+      container.appendChild(fbHost);
+    }
 
     const seekDelta = Math.max(1, Number(player && player.config && player.config.seekTime) || 10);
     const TAP_WINDOW_MS = 350;            // tighter window to aggregate taps (was 700)

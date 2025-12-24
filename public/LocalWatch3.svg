@@ -1,0 +1,26 @@
+<svg width="400" height="400" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g filter="url(#a)" stroke-width="32" stroke-linejoin="round">
+<path d="M152 280V120l136 80z" fill="url(#b)" stroke="url(#b)"/>
+<path d="M152 252V148l96 52z" fill="url(#c)" stroke="url(#c)"/>
+<path d="M152 224V176l56 24z" fill="url(#d)" stroke="url(#d)"/>
+</g>
+<defs>
+<linearGradient id="d" x1="152" y1="176" x2="208" y2="224" gradientUnits="userSpaceOnUse">
+<stop stop-color="#fbbf24"/>
+<stop offset="1" stop-color="#d97706"/>
+</linearGradient>
+<linearGradient id="c" x1="152" y1="148" x2="248" y2="252" gradientUnits="userSpaceOnUse">
+<stop stop-color="#d97706"/>
+<stop offset="1" stop-color="#9a3412"/>
+</linearGradient>
+<linearGradient id="b" x1="152" y1="120" x2="288" y2="280" gradientUnits="userSpaceOnUse">
+<stop stop-color="#b45309"/>
+<stop offset="1" stop-color="#451a03"/>
+</linearGradient>
+<filter id="a" x="100" y="80" width="260" height="240" filterUnits="userSpaceOnUse">
+<feGaussianBlur in="SourceAlpha" stdDeviation="12" result="blur"/>
+<feComposite in="color" in2="blur" operator="in" result="shadow"/>
+<feBlend in="SourceGraphic" in2="shadow"/>
+</filter>
+</defs>
+</svg>

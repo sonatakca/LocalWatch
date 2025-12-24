@@ -1,0 +1,35 @@
+<svg width="100" height="100" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100" height="100" rx="24" fill="#1C1512"/>
+
+  <g filter="url(#metallic_glow)">
+    <path d="M38 70V30L72 50L38 70Z"
+          fill="url(#copper_deep)" stroke="url(#copper_deep)"
+          stroke-width="8" stroke-linejoin="round"/>
+
+    <path d="M38 63V37L62 50L38 63Z"
+          fill="url(#copper_mid)" stroke="url(#copper_mid)"
+          stroke-width="8" stroke-linejoin="round"/>
+
+    <path d="M38 56V44L52 50L38 56Z"
+          fill="url(#copper_bright)" stroke="url(#copper_bright)"
+          stroke-width="8" stroke-linejoin="round"/>
+  </g>
+
+  <defs>
+    <filter id="metallic_glow" x="25" y="20" width="65" height="60" filterUnits="userSpaceOnUse">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="blur"/>
+      <feFlood flood-color="#F59E0B" flood-opacity="0.3" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="shadow"/>
+      <feBlend in="SourceGraphic" in2="shadow" mode="normal"/>
+    </filter>
+
+    <linearGradient id="copper_bright" x1="38" y1="44" x2="52" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FBBF24"/> <stop offset="1" stop-color="#D97706"/> </linearGradient>
+
+    <linearGradient id="copper_mid" x1="38" y1="37" x2="62" y2="63" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D97706"/> <stop offset="1" stop-color="#9A3412"/> </linearGradient>
+
+    <linearGradient id="copper_deep" x1="38" y1="30" x2="72" y2="70" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B45309"/> <stop offset="1" stop-color="#451A03"/> </linearGradient>
+  </defs>
+</svg>

@@ -6,14 +6,18 @@ const ffmpegPath = require('ffmpeg-static');
 const ffprobePath = require('@ffprobe-installer/ffprobe').path;
 const ffmpeg = require('fluent-ffmpeg');
 const crypto = require('crypto');
+const { TextDecoder } = require('util');
 const os = require('os');
+const { spawn } = require('child_process');
+const console = require('console');
 if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
 if (ffprobePath) ffmpeg.setFfprobePath(ffprobePath);
+const FFMPEG_BIN = ffmpegPath || 'ffmpeg';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const VIDEO_DIR = process.env.VIDEO_DIR || path.join(__dirname, 'media');
-const CACHE_DIR = path.join(VIDEO_DIR, '.cache');
+const CACHE_DIR = path.join(VIDEO_DIR, '.cache'); // root cache for uncategorized files
 const CACHE_VERSION = 4; // bump to invalidate old remux outputs (subtitle embedding)
 
 const ALLOWED_EXTS = new Set(['.mp4', '.webm', '.mkv', '.mov', '.m4v', '.avi']);
@@ -23,6 +27,151 @@ const INCLUDE_MARKER = '.include';
 const EXCLUDED_DIRS = new Set(['.cache', 'node_modules']);
 // Simple in-memory metadata cache keyed by path+size+mtime
 const metaCache = new Map();
+
+// Track remux/transcode progress for UI polling
+const remuxStatusActive = new Map(); // abs -> status object
+const remuxStatusRecent = [];
+const REMUX_RECENT_LIMIT = 8;
+const REMUX_RECENT_TTL_MS = 2 * 60 * 1000;
+const remuxLogLast = new Map(); // abs -> { ts, percent }
+
+const tcol = {
+  // Reset
+  reset: "\x1b[0m",
+
+  // --- Text Styles ---
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  italic: "\x1b[3m",
+  underline: "\x1b[4m",
+  blink: "\x1b[5m",
+  reverse: "\x1b[7m",
+  hidden: "\x1b[8m",
+  strike: "\x1b[9m",
+
+  // --- Foreground (Bright/High Contrast) ---
+  pink: "\x1b[95m",     // Bright Magenta
+  red: "\x1b[91m",      // Bright Red
+  green: "\x1b[92m",    // Bright Green
+  yellow: "\x1b[93m",   // Bright Yellow
+  blue: "\x1b[94m",     // Bright Blue
+  cyan: "\x1b[96m",     // Bright Cyan
+  white: "\x1b[97m",    // Bright White
+  gray: "\x1b[90m",     // Bright Black / Gray
+
+  // --- Extended Colors (256-color palette) ---
+  orange: "\x1b[38;5;208m", // Standard Xterm Orange
+  purple: "\x1b[38;5;129m", // Deep Purple
+  teal: "\x1b[38;5;37m",   // Darker Cyan
+  gold: "\x1b[38;5;214m",   // Golden Yellow
+  lime: "\x1b[38;5;118m",   // Electric Green
+  brown: "\x1b[38;5;94m",   // Matches your SVG theme
+  
+  // --- Background Colors ---
+  bgRed: "\x1b[41m",
+  bgGreen: "\x1b[42m",
+  bgYellow: "\x1b[43m",
+  bgBlue: "\x1b[44m",
+  bgMagenta: "\x1b[45m",
+  bgCyan: "\x1b[46m",
+  bgWhite: "\x1b[47m",
+
+  // --- Utility Functions ---
+  // Create any RGB color (supports 16 million colors in modern terminals)
+  rgb: (r, g, b) => `\x1b[38;2;${r};${g};${b}m`,
+  bgRgb: (r, g, b) => `\x1b[48;2;${r};${g};${b}m`
+};
+
+function createGradient(text, start, end) {
+  // Count only non-whitespace chars (so spaces don't consume gradient steps)
+  const nonSpaceCount = [...text].filter(ch => !/\s/.test(ch)).length;
+
+  // Edge cases: no characters / only spaces / only 1 colored char
+  if (nonSpaceCount === 0) return text;
+  if (nonSpaceCount === 1) {
+    // color the single non-space char with start (or end; same effect)
+    let done = false;
+    let out = "";
+    for (const ch of text) {
+      if (!done && !/\s/.test(ch)) {
+        out += `${tcol.rgb(start.r, start.g, start.b)}${ch}`;
+        done = true;
+      } else {
+        out += ch;
+      }
+    }
+    return out + tcol.reset;
+  }
+
+  const steps = nonSpaceCount - 1;
+  let idx = 0; // gradient index over non-space chars
+  let result = "";
+
+  for (const ch of text) {
+    if (/\s/.test(ch)) {
+      // keep spaces uncolored (or keep previous color if you prefer)
+      result += ch;
+      continue;
+    }
+
+    const ratio = idx / steps;
+
+    const r = Math.round(start.r + (end.r - start.r) * ratio);
+    const g = Math.round(start.g + (end.g - start.g) * ratio);
+    const b = Math.round(start.b + (end.b - start.b) * ratio);
+
+    // Optional clamp if someone passes weird values
+    const rc = Math.max(0, Math.min(255, r));
+    const gc = Math.max(0, Math.min(255, g));
+    const bc = Math.max(0, Math.min(255, b));
+
+    result += `${tcol.rgb(rc, gc, bc)}${ch}`;
+    idx++;
+  }
+
+  return result + tcol.reset;
+}
+
+
+function trimRemuxRecent() {
+  const cutoff = Date.now() - REMUX_RECENT_TTL_MS;
+  while (remuxStatusRecent.length && remuxStatusRecent[0].finishedAt && remuxStatusRecent[0].finishedAt < cutoff) {
+    remuxStatusRecent.shift();
+  }
+  if (remuxStatusRecent.length > REMUX_RECENT_LIMIT) {
+    remuxStatusRecent.splice(0, remuxStatusRecent.length - REMUX_RECENT_LIMIT);
+  }
+}
+
+function upsertRemuxStatus(abs, patch) {
+  const prev = remuxStatusActive.get(abs) || {};
+  const next = { ...prev, ...patch };
+  remuxStatusActive.set(abs, next);
+  return next;
+}
+
+function finishRemuxStatus(abs, patch) {
+  const prev = remuxStatusActive.get(abs) || {};
+  const next = { ...prev, ...patch };
+  if (!next.finishedAt) next.finishedAt = Date.now();
+  remuxStatusActive.delete(abs);
+  remuxStatusRecent.push(next);
+  // Keep recent sorted oldest->newest for efficient trim
+  remuxStatusRecent.sort((a, b) => (a.finishedAt || 0) - (b.finishedAt || 0));
+  trimRemuxRecent();
+  return next;
+}
+
+function secondsFromTimemark(tm) {
+  if (!tm || typeof tm !== 'string') return null;
+  const m = tm.trim().match(/^(\d+):([0-5]?\d):([0-5]?\d)(?:\.(\d+))?$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10) || 0;
+  const min = parseInt(m[2], 10) || 0;
+  const s = parseInt(m[3], 10) || 0;
+  const ms = parseInt((m[4] || '0').slice(0, 3), 10) || 0;
+  return h * 3600 + min * 60 + s + ms / 1000;
+}
 
 function ensureVideoDir() {
   if (!fs.existsSync(VIDEO_DIR)) {
@@ -95,6 +244,9 @@ try {
     const lrPort = Number(process.env.LIVERELOAD_PORT) || 35729;
     // Run the LiveReload server on all interfaces so LAN clients can connect
     const livereload = require('livereload');
+    const lrStart = { r: 0, g: 180, b: 180 }; // DarkCyan
+    const lrEnd = { r: 0, g: 255, b: 255 };   // Bright Cyan
+    const lrText = createGradient("[LiveReload]", lrStart, lrEnd)
     const lrserver = livereload.createServer({
       host: '0.0.0.0',
       port: lrPort,
@@ -102,7 +254,7 @@ try {
       delay: 100,
     });
     lrserver.watch([path.join(__dirname, 'public')]);
-    console.log(`LiveReload active on 0.0.0.0:${lrPort}, watching public/`);
+    console.log(`${lrText} ${tcol.green}[active]${tcol.reset} \n   ${tcol.yellow}0.0.0.0:${lrPort}, watching public/${tcol.reset}`);
   }
 } catch (e) {
   // Dev dependencies not installed or some environments may not support this; ignore silently
@@ -137,6 +289,23 @@ if (AUTH_USER && AUTH_PASS) {
 // Shared file helpers
 function ensureParentDir(p) {
   fs.mkdirSync(path.dirname(p), { recursive: true });
+}
+
+// Resolve per-title cache directory: files in a top-level folder get a .cache inside that folder.
+// Files directly under VIDEO_DIR use the root .cache.
+function cacheDirFor(relPath) {
+  try {
+    const parts = (relPath || '').split(/[\\/]+/).filter(Boolean);
+    if (parts.length > 1) {
+      const top = parts[0];
+      const dir = path.join(VIDEO_DIR, top, '.cache');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      return dir;
+    }
+  } catch {}
+  // Fallback to root cache for uncategorized
+  if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
+  return CACHE_DIR;
 }
 
 function copyFileSyncBuffered(src, dest) {
@@ -256,10 +425,20 @@ function enqueuePreconvert(abs, rel) {
     const st = fs.statSync(abs);
     const { abs: outAbs } = cachePathFor(rel, st.size, st.mtimeMs);
     if (fs.existsSync(outAbs)) return; // already converted
+    // Mark queued so UI can show progress immediately
+    upsertRemuxStatus(outAbs, {
+      id: outAbs,
+      input: rel,
+      output: path.relative(VIDEO_DIR, outAbs).replace(/\\/g, '/'),
+      size: st.size,
+      stage: 'queued',
+      trigger: 'preconvert',
+      queuedAt: Date.now(),
+    });
     const key = `${abs}:${st.size}:${st.mtimeMs}`;
     if (preconvertQueuedKeys.has(key)) return;
     preconvertQueuedKeys.add(key);
-    preconvertQueue.push({ abs, rel, key });
+    preconvertQueue.push({ abs, rel, key, queuedAt: Date.now() });
     process.nextTick(runPreconvertWorker);
   } catch {}
 }
@@ -273,7 +452,7 @@ async function runPreconvertWorker() {
     (async () => {
       try {
         const codecs = await probe(task.abs).catch(() => null);
-        await ensureRemuxedMp4(task.abs, task.rel, codecs || {});
+        await ensureRemuxedMp4(task.abs, task.rel, codecs || {}, { trigger: 'preconvert', queuedAt: task.queuedAt });
       } catch (e) {
         try { console.error('Preconvert failed:', task.rel, e && e.message || e); } catch {}
       } finally {
@@ -308,6 +487,25 @@ function startPreconvertLoop() {
 }
 
 startPreconvertLoop();
+
+function getRemuxStatusSnapshot() {
+  trimRemuxRecent();
+  return {
+    active: Array.from(remuxStatusActive.values()).map((s) => ({ ...s })),
+    recent: remuxStatusRecent.slice().reverse(),
+    queue: preconvertQueue.length,
+    running: preconvertActive,
+  };
+}
+
+// Lightweight status endpoint for UI polling
+app.get('/api/convert_status', (req, res) => {
+  try {
+    res.json(getRemuxStatusSnapshot());
+  } catch (e) {
+    res.status(500).json({ error: 'status-failed' });
+  }
+});
 
 // Accept raw uploads streamed to disk inside VIDEO_DIR.
 // Usage: POST /upload?p=<relative/path/in/media>
@@ -706,32 +904,50 @@ function cachePathFor(relPath, size, mtime) {
   const key = `v${CACHE_VERSION}:${relPath}:${size}:${mtime}`;
   const hash = crypto.createHash('md5').update(key).digest('hex').slice(0, 10);
   const fileName = `${safeBase}-${hash}.mp4`;
-  const abs = path.join(CACHE_DIR, fileName);
+  const cacheDir = cacheDirFor(relPath);
+  const abs = path.join(cacheDir, fileName);
   const rel = path.relative(VIDEO_DIR, abs).replace(/\\/g, '/');
   return { abs, rel };
 }
 
 const remuxInProgress = new Map(); // abs -> Promise
 
-async function ensureRemuxedMp4(filePath, relPath, codecs) {
+async function ensureRemuxedMp4(filePath, relPath, codecs, opts = {}) {
   const st = fs.statSync(filePath);
   const { abs, rel } = cachePathFor(relPath, st.size, st.mtimeMs);
-  if (fs.existsSync(abs)) return { abs, rel };
+  const baseStatus = {
+    id: abs,
+    input: relPath,
+    output: rel,
+    size: st.size,
+    stage: 'queued',
+    trigger: opts.trigger || 'on-demand',
+    queuedAt: opts.queuedAt || Date.now(),
+  };
+  if (fs.existsSync(abs)) {
+    finishRemuxStatus(abs, { ...baseStatus, stage: 'done', percent: 100 });
+    return { abs, rel };
+  }
+  // If a conversion is already running, reuse its status and wait.
   if (remuxInProgress.has(abs)) {
+    upsertRemuxStatus(abs, { ...baseStatus, stage: 'running' });
     await remuxInProgress.get(abs);
     return { abs, rel };
   }
   // Prefer to embed a text subtitle for iOS native players
   let subToEmbed = null;
-  let subAbsPath = null;
+  let subInputPath = null;
   let subLang = null;
   let subTitle = null;
   try {
     const subs = findSubsForVideo(filePath) || [];
     subToEmbed = subs.find(s => (s && s.lang === 'tr')) || subs[0] || null;
     if (subToEmbed && subToEmbed.file) {
-      subAbsPath = path.resolve(path.dirname(filePath), subToEmbed.file);
-      if (!fs.existsSync(subAbsPath)) subAbsPath = null;
+      const cand = path.resolve(path.dirname(filePath), subToEmbed.file);
+      if (fs.existsSync(cand)) {
+        const prepared = prepareSubtitleUtf8(cand, relPath);
+        subInputPath = (prepared && prepared.path) || cand;
+      }
       subLang = (subToEmbed.lang || 'tr').toLowerCase();
       try { subTitle = subToEmbed.label || langLabel(subLang) || subLang.toUpperCase(); } catch { subTitle = subLang.toUpperCase(); }
       // Prefer localized label for Turkish
@@ -741,6 +957,7 @@ async function ensureRemuxedMp4(filePath, relPath, codecs) {
 
   const task = new Promise((resolve, reject) => {
     try {
+      upsertRemuxStatus(abs, { ...baseStatus, stage: 'running', startedAt: Date.now(), percent: 0 });
       const vCodec = (codecs && (codecs.videoCodec || '')).toString().toLowerCase();
       const aCodec = (codecs && (codecs.audioCodec || '')).toString().toLowerCase();
       const aCh = (codecs && Number(codecs.audioChannels)) || 0;
@@ -751,22 +968,24 @@ async function ensureRemuxedMp4(filePath, relPath, codecs) {
       // Using -itsoffset with dual inputs can double the delay, so
       // we avoid it here.
       const cmd = ffmpeg(filePath);
+      cmd.inputOptions(['-err_detect', 'ignore_err']);
 
       // Add external subtitle as a second input, to be embedded into MP4
-      if (subAbsPath) {
+      if (subInputPath) {
         try {
-          console.log('Embedding subtitle:', path.basename(subAbsPath));
-          cmd.input(subAbsPath);
+          console.log('Embedding subtitle:', path.basename(subInputPath));
+          cmd.input(subInputPath);
+          const ext = path.extname(subInputPath).toLowerCase();
+          const subInputOpts = ['-err_detect', 'ignore_err'];
           // Best-effort charset for SRT/ASS files containing non-ASCII
-          const ext = path.extname(subAbsPath).toLowerCase();
           if (ext === '.srt' || ext === '.ass' || ext === '.ssa') {
-            cmd.inputOptions(['-sub_charenc', 'UTF-8']);
+            subInputOpts.unshift('-sub_charenc', 'UTF-8');
           }
+          cmd.inputOptions(subInputOpts);
         } catch {}
       }
 
-      cmd.inputOptions(['-err_detect', 'ignore_err'])
-        .outputOptions([
+      cmd.outputOptions([
           '-movflags', 'faststart',
         ])
         .format('mp4');
@@ -799,7 +1018,7 @@ async function ensureRemuxedMp4(filePath, relPath, codecs) {
       }
 
       // Explicitly map streams, including the (optional) external subtitle
-      if (subAbsPath) {
+      if (subInputPath) {
         cmd.outputOptions([
           '-map', '0:v:0',
           '-map', '0:a:0?',
@@ -823,16 +1042,50 @@ async function ensureRemuxedMp4(filePath, relPath, codecs) {
         ]);
       }
 
-      cmd.on('error', (err) => {
+      cmd.on('progress', (prog) => {
+        try {
+          const duration = codecs && Number(codecs.durationSec);
+          let percent = Number(prog.percent) || null;
+          if ((!percent || !Number.isFinite(percent)) && duration && prog && prog.timemark) {
+            const sec = secondsFromTimemark(prog.timemark);
+            if (sec != null && duration > 0) percent = Math.min(99.5, (sec / duration) * 100);
+          }
+          upsertRemuxStatus(abs, {
+            ...baseStatus,
+            stage: 'running',
+            percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null,
+            timemark: prog && prog.timemark,
+            speedKbps: prog && Number(prog.currentKbps),
+            updatedAt: Date.now(),
+          });
+          // Throttle terminal logging to avoid noise
+          const last = remuxLogLast.get(abs) || { ts: 0, percent: 0 };
+          const now = Date.now();
+          const pctRounded = Number.isFinite(percent) ? Math.floor(percent) : null;
+          if ((pctRounded != null && pctRounded !== last.percent) || now - last.ts > 4000) {
+            const name = path.basename(relPath || baseStatus.input || abs);
+            const pctStr = pctRounded != null ? `${pctRounded}%` : (prog && prog.timemark ? prog.timemark : '...');
+            console.log(`${tcol.blue}[convert]${tcol.reset} ${name}: ${pctStr}`);
+            remuxLogLast.set(abs, { ts: now, percent: pctRounded });
+          }
+        } catch {}
+      }).on('error', (err) => {
         remuxInProgress.delete(abs);
         try { fs.unlinkSync(abs); } catch {}
+        finishRemuxStatus(abs, { ...baseStatus, stage: 'error', percent: null, error: err && err.message || err });
         reject(err);
       }).on('end', () => {
         remuxInProgress.delete(abs);
+        finishRemuxStatus(abs, { ...baseStatus, stage: 'done', percent: 100 });
+        try {
+          const name = path.basename(relPath || baseStatus.input || abs);
+          console.log(`${tcol.blue}[convert]${tcol.res} ${name} ${tcol.red}[done]${tcol.reset}`);
+        } catch {}
         resolve();
       }).save(abs);
     } catch (e) {
       remuxInProgress.delete(abs);
+      finishRemuxStatus(abs, { ...baseStatus, stage: 'error', percent: null, error: e && e.message || e });
       reject(e);
     }
   });
@@ -853,7 +1106,7 @@ app.get('/remux', async (req, res) => {
   }
   try {
     const codecs = await probe(filePath);
-    const { rel } = await ensureRemuxedMp4(filePath, relPath, codecs || {});
+    const { rel } = await ensureRemuxedMp4(filePath, relPath, codecs || {}, { trigger: 'on-demand' });
     return res.redirect(302, `/stream?p=${encodeURIComponent(rel)}`);
   } catch (e) {
     console.error('Remux failed:', e);
@@ -1062,6 +1315,34 @@ function langLabel(code) {
   return map[code] || code.toUpperCase();
 }
 
+const utf8DecoderFatal = new TextDecoder('utf-8', { fatal: true });
+const SUB_ENCODING_CANDIDATES = ['windows-1254', 'iso-8859-9', 'windows-1252', 'iso-8859-1'];
+function prepareSubtitleUtf8(subAbsPath, relPath) {
+  try {
+    const buf = fs.readFileSync(subAbsPath);
+    try {
+      utf8DecoderFatal.decode(buf);
+      return { path: subAbsPath, encoding: 'utf-8', converted: false };
+    } catch {}
+    for (const enc of SUB_ENCODING_CANDIDATES) {
+      try {
+        const txt = new TextDecoder(enc, { fatal: true }).decode(buf);
+        const cacheDir = path.join(cacheDirFor(relPath), 'subs');
+        fs.mkdirSync(cacheDir, { recursive: true });
+        const hash = crypto.createHash('md5').update(buf).digest('hex').slice(0, 8);
+        const ext = path.extname(subAbsPath);
+        const base = path.basename(subAbsPath, ext);
+        const out = path.join(cacheDir, `${base}-${hash}.utf8${ext}`);
+        fs.writeFileSync(out, txt, 'utf8');
+        return { path: out, encoding: enc, converted: true };
+      } catch {}
+    }
+  } catch (e) {
+    try { console.error('subtitle prepare failed:', e && e.message || e); } catch {}
+  }
+  return { path: subAbsPath, encoding: null, converted: false };
+}
+
 function findSubsForVideo(filePath) {
   try {
     const dir = path.dirname(filePath);
@@ -1189,9 +1470,511 @@ function findSkipIntroForVideo(filePath) {
   return null;
 }
 
+// Auto-detect skip-intro by matching a reference intro audio clip (e.g. thewire_season1_intro.mp3)
+const AUTO_SKIP_AUDIO_EXTS = new Set(['.mp3', '.m4a', '.wav', '.flac', '.ogg']);
+const AUTO_SKIP_NAME_HINTS = ['intro', 'opening', 'theme'];
+const AUTO_SKIP_FRAME_MS = Number(process.env.SKIPINTRO_FRAME_MS || 250); // analysis resolution
+const AUTO_SKIP_MAX_SCAN_SEC = Number(process.env.SKIPINTRO_MAX_SCAN_SEC || 900); // scan first 15 min
+const AUTO_SKIP_MIN_SCORE = Number(process.env.SKIPINTRO_MIN_SCORE || 0.50);
+const DETECT_INTRO_FILENAME = '.detectIntro';
+const SKIPINTRO_AUTOSCAN = process.env.SKIPINTRO_AUTOSCAN !== '0';
+const SKIPINTRO_AUTOSCAN_FORCE = process.env.SKIPINTRO_AUTOSCAN_FORCE === '1';
+const SKIPINTRO_AUTOSCAN_DELAY_MS = Number(process.env.SKIPINTRO_AUTOSCAN_DELAY_MS || 1500);
+
+const autoSkipCacheMem = new Map(); // cachePath -> entries object
+const introRefCache = new Map(); // abs ref path -> { frames, durationSec, frameSec }
+
+function relKey(relPath) {
+  return (relPath || '').replace(/\\/g, '/');
+}
+
+function skipIntroCachePath(relPath) {
+  const dir = cacheDirFor(relPath || '');
+  return path.join(dir, 'skipintro-auto.json');
+}
+
+function loadAutoSkipCache(relPath) {
+  const p = skipIntroCachePath(relPath);
+  if (autoSkipCacheMem.has(p)) return autoSkipCacheMem.get(p);
+  try {
+    if (fs.existsSync(p)) {
+      const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+      autoSkipCacheMem.set(p, raw);
+      return raw;
+    }
+  } catch {}
+  autoSkipCacheMem.set(p, {});
+  return {};
+}
+
+function saveAutoSkipCache(relPath, data) {
+  try {
+    const p = skipIntroCachePath(relPath);
+    ensureParentDir(p);
+    fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf8');
+    autoSkipCacheMem.set(p, data);
+  } catch (e) {
+    console.error('Failed to persist auto skip-intro cache:', e && e.message ? e.message : e);
+  }
+}
+
+function getCachedAutoSkipEntry(relPath) {
+  const key = relKey(relPath);
+  const cache = loadAutoSkipCache(relPath);
+  return cache && cache[key] ? cache[key] : null;
+}
+
+function isValidSkipWindow(entry) {
+  return !!(entry && typeof entry.start === 'number' && typeof entry.end === 'number' && entry.end > entry.start);
+}
+
+function getCachedAutoSkip(relPath) {
+  const entry = getCachedAutoSkipEntry(relPath);
+  if (!entry) return null;
+  if (entry.status === 'failed' || entry.status === 'unreferenced') return null;
+  return isValidSkipWindow(entry) ? entry : null;
+}
+
+function setCachedAutoSkipEntry(relPath, payload) {
+  const key = relKey(relPath);
+  const cache = loadAutoSkipCache(relPath);
+  cache[key] = payload;
+  saveAutoSkipCache(relPath, cache);
+}
+
+function parseDetectIntroFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const map = new Map(); // key: number|string 'x' -> filename
+    raw.split(/\r?\n/).forEach((line) => {
+      const ln = line.trim();
+      if (!ln || ln.startsWith('#') || ln.startsWith('//')) return;
+      const m = ln.match(/^S(\d{1,3}|x)\s*(?:->|:|=)\s*([^#;]+)/i);
+      if (!m) return;
+      const seasonToken = m[1].toLowerCase() === 'x' ? 'x' : parseInt(m[1], 10);
+      const file = m[2].trim();
+      if (!file) return;
+      map.set(seasonToken, file);
+    });
+    if (!map.size) return null;
+    return { baseDir: path.dirname(filePath), map, filePath };
+  } catch (e) {
+    return null;
+  }
+}
+
+function parseSeasonFromName(filePath) {
+  const rel = path.relative(VIDEO_DIR, filePath);
+  const name = path.basename(filePath);
+  const tok = parseSeasonEpisodeToken(rel) || parseSeasonEpisodeToken(name);
+  if (tok && Number.isFinite(tok.s)) return tok.s;
+  return null;
+}
+
+function findDetectIntroConfig(filePath) {
+  try {
+    let dir = path.dirname(filePath);
+    const root = path.resolve(VIDEO_DIR);
+    while (dir && dir.length >= root.length) {
+      const cand = path.join(dir, DETECT_INTRO_FILENAME);
+      if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+        const cfg = parseDetectIntroFile(cand);
+        if (cfg && cfg.map && cfg.map.size) return cfg;
+      }
+      if (dir === root) break;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {}
+  return null;
+}
+
+function resolveIntroFromConfig(cfg, filePath) {
+  if (!cfg || !cfg.map || !cfg.map.size) return { path: null, reason: 'no-config' };
+  const season = parseSeasonFromName(filePath);
+  const seasonKey = season != null ? season : null;
+  const match = (seasonKey != null && cfg.map.get(seasonKey)) || cfg.map.get('x');
+  if (!match) return { path: null, reason: 'no-mapping', source: 'detectIntro', configPath: cfg.filePath || null };
+  const abs = path.resolve(cfg.baseDir, match);
+  const ext = path.extname(abs).toLowerCase();
+  if (!AUTO_SKIP_AUDIO_EXTS.has(ext)) {
+    return { path: null, reason: 'invalid-ref-ext', source: 'detectIntro', ref: match, configPath: cfg.filePath || null };
+  }
+  if (!fs.existsSync(abs)) {
+    return { path: null, reason: 'missing-ref', source: 'detectIntro', ref: match, configPath: cfg.filePath || null };
+  }
+  return { path: abs, name: path.basename(abs), source: 'detectIntro', ref: match, configPath: cfg.filePath || null };
+}
+
+function findIntroReferenceHeuristic(filePath) {
+  try {
+    const rel = path.relative(VIDEO_DIR, filePath);
+    if (!rel || rel.startsWith('..')) return null;
+    const parts = rel.split(/[\\/]+/).filter(Boolean);
+    if (!parts.length) return null;
+    // Prefer a reference intro clip under the show root (top-level folder)
+    const showRoot = path.join(VIDEO_DIR, parts[0]);
+    const tryDirs = [showRoot, path.dirname(filePath)];
+    let candidates = [];
+    for (const dir of tryDirs) {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const de of entries) {
+          if (!de.isFile()) continue;
+          const ext = path.extname(de.name).toLowerCase();
+          if (!AUTO_SKIP_AUDIO_EXTS.has(ext)) continue;
+          const lower = de.name.toLowerCase();
+          if (!AUTO_SKIP_NAME_HINTS.some(h => lower.includes(h))) continue;
+          const abs = path.join(dir, de.name);
+          const st = fs.statSync(abs);
+          candidates.push({
+            abs,
+            name: de.name,
+            ext,
+            size: st.size || 0,
+            score: (lower.includes('intro') ? 2 : 0) + (lower.includes('wire') ? 1 : 0) + (ext === '.mp3' ? 0.2 : 0),
+          });
+        }
+      } catch {}
+      if (candidates.length) break; // prefer first directory with matches
+    }
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => b.score - a.score || b.size - a.size);
+    return candidates[0].abs;
+  } catch (e) {
+    return null;
+  }
+}
+
+function resolveIntroReference(filePath) {
+  // 1) Prefer explicit mapping from .detectIntro (season-specific or default Sx)
+  const cfg = findDetectIntroConfig(filePath);
+  if (cfg) {
+    return resolveIntroFromConfig(cfg, filePath);
+  }
+  // 2) Fallback to heuristic filename-based search (backwards compatible)
+  const heuristic = findIntroReferenceHeuristic(filePath);
+  if (heuristic) {
+    return { path: heuristic, name: path.basename(heuristic), source: 'heuristic' };
+  }
+  return { path: null, reason: 'no-reference', source: 'heuristic' };
+}
+
+function pcm16FromBuffer(buf) {
+  return new Int16Array(buf.buffer, buf.byteOffset, Math.floor(buf.byteLength / 2));
+}
+
+function frameRmsSeries(buf, sampleRate, frameMs) {
+  const frameSamples = Math.max(1, Math.floor((sampleRate * frameMs) / 1000));
+  const pcm = pcm16FromBuffer(buf);
+  const len = pcm.length;
+  const frames = new Float32Array(Math.max(0, Math.floor(len / frameSamples)));
+  let idx = 0;
+  for (let i = 0; i + frameSamples <= len; i += frameSamples) {
+    let sumSq = 0;
+    for (let j = 0; j < frameSamples; j++) {
+      const v = pcm[i + j];
+      sumSq += v * v;
+    }
+    frames[idx++] = Math.sqrt(sumSq / frameSamples) || 0;
+  }
+  return frames.subarray(0, idx);
+}
+
+function smoothSeries(series, radius) {
+  if (!series || !series.length || !radius) return series;
+  const out = new Float32Array(series.length);
+  for (let i = 0; i < series.length; i++) {
+    let sum = 0, count = 0;
+    for (let j = Math.max(0, i - radius); j <= Math.min(series.length - 1, i + radius); j++) {
+      sum += series[j];
+      count++;
+    }
+    out[i] = count ? sum / count : series[i];
+  }
+  return out;
+}
+
+function bestCorrelation(refSeries, targetSeries) {
+  if (!refSeries || !targetSeries || !refSeries.length || targetSeries.length < refSeries.length) {
+    return null;
+  }
+  const n = refSeries.length;
+  // Precompute ref mean/std
+  let refSum = 0, refSumSq = 0;
+  for (let i = 0; i < n; i++) {
+    const v = refSeries[i];
+    refSum += v;
+    refSumSq += v * v;
+  }
+  const refMean = refSum / n;
+  const refVar = Math.max(1e-9, refSumSq / n - refMean * refMean);
+  const refStd = Math.sqrt(refVar);
+
+  const prefix = new Float64Array(targetSeries.length + 1);
+  const prefixSq = new Float64Array(targetSeries.length + 1);
+  for (let i = 0; i < targetSeries.length; i++) {
+    const v = targetSeries[i];
+    prefix[i + 1] = prefix[i] + v;
+    prefixSq[i + 1] = prefixSq[i] + v * v;
+  }
+
+  let best = { score: -Infinity, offset: 0 };
+
+  for (let off = 0; off <= targetSeries.length - n; off++) {
+    const wSum = prefix[off + n] - prefix[off];
+    const wSumSq = prefixSq[off + n] - prefixSq[off];
+    const wMean = wSum / n;
+    const wVar = Math.max(1e-9, wSumSq / n - wMean * wMean);
+    const wStd = Math.sqrt(wVar);
+    if (!Number.isFinite(wStd) || wStd <= 0) continue;
+    let dot = 0;
+    for (let i = 0; i < n; i++) {
+      dot += (refSeries[i] - refMean) * (targetSeries[off + i] - wMean);
+    }
+    const denom = refStd * wStd * n;
+    if (!denom || !Number.isFinite(denom)) continue;
+    const score = dot / denom;
+    if (score > best.score) best = { score, offset: off };
+  }
+  return { best };
+}
+
+function readPcmMono(filePath, opts = {}) {
+  const sampleRate = opts.sampleRate || 8000;
+  const args = ['-hide_banner', '-loglevel', 'error'];
+  if (opts.startSec) {
+    args.push('-ss', String(opts.startSec));
+  }
+  args.push('-i', filePath, '-vn', '-ac', '1', '-ar', String(sampleRate));
+  if (opts.maxSec) {
+    args.push('-t', String(opts.maxSec));
+  }
+  args.push('-f', 's16le', 'pipe:1');
+  return new Promise((resolve, reject) => {
+    try {
+      const child = spawn(FFMPEG_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const chunks = [];
+      child.stdout.on('data', (d) => chunks.push(d));
+      child.on('error', (e) => reject(e));
+      child.on('close', (code) => {
+        if (code !== 0) return reject(new Error(`ffmpeg exited with ${code}`));
+        resolve(Buffer.concat(chunks));
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+async function loadIntroReference(refPath) {
+  if (!refPath) return null;
+  if (introRefCache.has(refPath)) return introRefCache.get(refPath);
+  try {
+    const sampleRate = 8000;
+    const pcm = await readPcmMono(refPath, { sampleRate });
+    if (!pcm || !pcm.length) return null;
+    const frames = frameRmsSeries(pcm, sampleRate, AUTO_SKIP_FRAME_MS);
+    const smooth = smoothSeries(frames, 1);
+    const durationSec = (frames.length * AUTO_SKIP_FRAME_MS) / 1000;
+    const ref = { frames: smooth, durationSec, frameSec: AUTO_SKIP_FRAME_MS / 1000 };
+    introRefCache.set(refPath, ref);
+    return ref;
+  } catch (e) {
+    console.error('Failed to load intro reference', refPath, e && e.message ? e.message : e);
+    introRefCache.set(refPath, null);
+    return null;
+  }
+}
+
+function statSafe(filePath) {
+  try {
+    const st = fs.statSync(filePath);
+    return { size: st.size, mtimeMs: st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+function entryMatchesStats(entry, srcStat, refStat, refName) {
+  if (!entry || !srcStat) return false;
+  if (entry.srcSize != null && entry.srcSize !== srcStat.size) return false;
+  if (entry.srcMtime != null && entry.srcMtime !== srcStat.mtimeMs) return false;
+  if (refStat) {
+    if (refName && entry.ref && entry.ref !== refName) return false;
+    if (entry.refSize != null && entry.refSize !== refStat.size) return false;
+    if (entry.refMtime != null && entry.refMtime !== refStat.mtimeMs) return false;
+  }
+  return true;
+}
+
+async function autoDetectSkipIntro(filePath, relPath, opts = {}) {
+  try {
+    const force = !!opts.force;
+    const srcStat = statSafe(filePath);
+    const cachedEntry = getCachedAutoSkipEntry(relPath);
+    const refInfo = resolveIntroReference(filePath);
+    const refPath = refInfo && refInfo.path;
+    const refName = refInfo && (refInfo.name || (refInfo.ref && path.basename(refInfo.ref))) || null;
+    const refStat = refPath ? statSafe(refPath) : null;
+
+    const cachedOk = getCachedAutoSkip(relPath);
+    if (!force && cachedOk && entryMatchesStats(cachedOk, srcStat, refStat, refName)) {
+      return cachedOk;
+    }
+
+    if (!refPath) {
+      const payload = {
+        status: 'unreferenced',
+        ref: 'unreferenced',
+        reason: (refInfo && refInfo.reason) || 'unreferenced',
+        refSource: (refInfo && refInfo.source) || null,
+        updatedAt: Date.now(),
+        srcSize: srcStat ? srcStat.size : null,
+        srcMtime: srcStat ? srcStat.mtimeMs : null,
+      };
+      if (!force && cachedEntry && cachedEntry.status === 'unreferenced' && entryMatchesStats(cachedEntry, srcStat, null, null)) {
+        return null;
+      }
+      setCachedAutoSkipEntry(relPath, payload);
+      return null;
+    }
+
+    if (!force && cachedEntry && cachedEntry.status === 'failed' && entryMatchesStats(cachedEntry, srcStat, refStat, refName)) {
+      return null;
+    }
+
+    const ref = await loadIntroReference(refPath);
+    if (!ref || !ref.frames || !ref.frames.length) {
+      setCachedAutoSkipEntry(relPath, {
+        status: 'failed',
+        ref: refName || path.basename(refPath),
+        reason: 'ref-load-failed',
+        refSource: (refInfo && refInfo.source) || null,
+        updatedAt: Date.now(),
+        srcSize: srcStat ? srcStat.size : null,
+        srcMtime: srcStat ? srcStat.mtimeMs : null,
+        refSize: refStat ? refStat.size : null,
+        refMtime: refStat ? refStat.mtimeMs : null,
+      });
+      return null;
+    }
+    const st = fs.statSync(filePath);
+    let durationSec = null;
+    try {
+      const key = `${filePath}:${st.size}:${st.mtimeMs}`;
+      let meta = metaCache.get(key);
+      if (!meta) { meta = await probe(filePath); metaCache.set(key, meta || {}); }
+      if (meta && typeof meta.durationSec === 'number') durationSec = meta.durationSec;
+    } catch {}
+    const maxScan = Math.min(AUTO_SKIP_MAX_SCAN_SEC, durationSec ? Math.ceil(durationSec) : AUTO_SKIP_MAX_SCAN_SEC);
+    const pcm = await readPcmMono(filePath, { sampleRate: 8000, maxSec: maxScan });
+    if (!pcm || !pcm.length) return null;
+    let series = frameRmsSeries(pcm, 8000, AUTO_SKIP_FRAME_MS);
+    series = smoothSeries(series, 1);
+    const corr = bestCorrelation(ref.frames, series);
+    if (!corr || !corr.best || !Number.isFinite(corr.best.score)) return null;
+    const { best } = corr;
+    if (best.score < AUTO_SKIP_MIN_SCORE) {
+      const startSec = Math.max(0, best.offset * (AUTO_SKIP_FRAME_MS / 1000));
+      setCachedAutoSkipEntry(relPath, {
+        status: 'failed',
+        ref: refName || path.basename(refPath),
+        score: best.score,
+        at: startSec,
+        reason: 'low-confidence',
+        refSource: (refInfo && refInfo.source) || null,
+        updatedAt: Date.now(),
+        srcSize: srcStat ? srcStat.size : null,
+        srcMtime: srcStat ? srcStat.mtimeMs : null,
+        refSize: refStat ? refStat.size : null,
+        refMtime: refStat ? refStat.mtimeMs : null,
+      });
+      return null;
+    }
+    const startSec = Math.max(0, best.offset * (AUTO_SKIP_FRAME_MS / 1000));
+    let endSec = startSec + ref.durationSec;
+    if (durationSec && endSec > durationSec) endSec = durationSec;
+    const result = {
+      status: 'ok',
+      start: startSec,
+      end: endSec,
+      score: best.score,
+      ref: refName || path.basename(refPath),
+      refSource: (refInfo && refInfo.source) || null,
+      updatedAt: Date.now(),
+      srcSize: srcStat ? srcStat.size : null,
+      srcMtime: srcStat ? srcStat.mtimeMs : null,
+      refSize: refStat ? refStat.size : null,
+      refMtime: refStat ? refStat.mtimeMs : null,
+    };
+    setCachedAutoSkipEntry(relPath, result);
+    return result;
+  } catch (e) {
+    console.error('Auto skip-intro detect failed for', relPath, e && e.message ? e.message : e);
+    return null;
+  }
+}
+
+async function runSkipIntroAutoScan() {
+  if (!SKIPINTRO_AUTOSCAN) return;
+  let items = [];
+  try { items = walk(VIDEO_DIR, VIDEO_DIR); } catch {}
+  if (!items || !items.length) return;
+  items.sort(compareEpisodeNatural);
+  console.log(`${tcol.blue}[skipintro]${tcol.reset} ${tcol.pink}[auto-scan start] [${items.length} items to scan]${tcol.reset}`);
+  const total = items.length;
+  let scanned = 0;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const abs = resolveSafe(it.relPath);
+    if (!abs || !fs.existsSync(abs)) continue;
+    // Skip if cache already matches current file + reference (unless force)
+    const srcStat = statSafe(abs);
+    const refInfo = resolveIntroReference(abs);
+    const refPath = refInfo && refInfo.path;
+    const refName = refInfo && (refInfo.name || (refInfo.ref && path.basename(refInfo.ref))) || null;
+    const refStat = refPath ? statSafe(refPath) : null;
+    const cachedEntry = getCachedAutoSkipEntry(it.relPath);
+    if (!SKIPINTRO_AUTOSCAN_FORCE && cachedEntry && entryMatchesStats(cachedEntry, srcStat, refStat, refName)) {
+      continue;
+    }
+    scanned += 1;
+    console.log(`${tcol.blue}[skipintro]${tcol.reset} ${tcol.cyan}[scan ${scanned}]${tcol.reset} ${tcol.bgRed}${it.relPath}${tcol.reset}`);
+    try {
+      await autoDetectSkipIntro(abs, it.relPath, { force: SKIPINTRO_AUTOSCAN_FORCE });
+    } catch (e) {
+      console.log(`${tcol.blue}[skipintro]${tcol.reset} ${tcol.pink}${tcol.pink}[result ${scanned}]${tcol.reset} error`);
+      continue;
+    }
+    const entry = getCachedAutoSkipEntry(it.relPath);
+    if (!entry) {
+      console.log(`${tcol.blue}[skipintro]${tcol.reset} ${tcol.pink}[result ${scanned}]${tcol.reset} none`);
+    } else if (entry.status === 'failed') {
+      const scoreStr = (typeof entry.score === 'number') ? ` score=${entry.score.toFixed(3)}` : '';
+      const gapStr = (typeof entry.gap === 'number') ? ` gap=${entry.gap.toFixed(3)}` : '';
+      const atStr = (typeof entry.at === 'number') ? ` at=${entry.at.toFixed(2)}s` : '';
+      const refStr = entry.ref ? ` ref=${entry.ref}` : '';
+      const reasonStr = entry.reason ? ` reason=${entry.reason}` : '';
+      console.log(`${tcol.blue}[skipintro]${tcol.reset} ${tcol.pink}[result ${scanned}]${tcol.reset} ${tcol.orange}failed${scoreStr}${gapStr}${atStr}${refStr}${reasonStr}${tcol.reset}`);
+    } else if (entry.status === 'unreferenced') {
+      const reasonStr = entry.reason ? ` reason=${entry.reason}` : '';
+      console.log(`${tcol.blue}[skipintro]${tcol.reset} ${tcol.pink}[result ${scanned}]${tcol.reset} unreferenced${reasonStr}`);
+    } else if (isValidSkipWindow(entry)) {
+      const scoreStr = (typeof entry.score === 'number') ? ` score=${entry.score.toFixed(3)}` : '';
+      console.log(`${tcol.blue}[skipintro]${tcol.reset} ${tcol.pink}[result ${scanned}]${tcol.reset} ${tcol.green}ok ${entry.start.toFixed(2)}s-${entry.end.toFixed(2)}s${scoreStr}${tcol.reset}`);
+    } else {
+      const status = entry.status || 'unknown';
+      console.log(`${tcol.blue}[skipintro]${tcol.reset} ${tcol.pink}[result ${scanned}]${tcol.reset} ${status}`);
+    }
+  }
+  console.log(`${tcol.blue}[skipintro]${tcol.reset} ${tcol.pink}[auto-scan  done] [${scanned}/${total} is scanned]${tcol.reset}`);
+}
+
 // Return skip-intro window for a given video
 // GET /skipintro?p=<relative video path>
-app.get('/skipintro', (req, res) => {
+app.get('/skipintro', async (req, res) => {
   const relPath = req.query.p;
   if (!relPath || typeof relPath !== 'string') {
     return res.status(400).json({});
@@ -1200,7 +1983,12 @@ app.get('/skipintro', (req, res) => {
   if (!filePath || !fs.existsSync(filePath)) {
     return res.status(404).json({});
   }
-  const se = findSkipIntroForVideo(filePath);
+  // 1) Manual .skipintro file in the folder tree
+  let se = findSkipIntroForVideo(filePath);
+  // 2) Auto-detect using intro reference audio (cached)
+  if (!se) {
+    se = await autoDetectSkipIntro(filePath, relPath).catch(() => null);
+  }
   if (!se) return res.json({});
   return res.json({ start: se.start, end: se.end });
 });
@@ -1225,7 +2013,8 @@ function parseNextEpisodeFile(filePath) {
       const ln = line.trim();
       if (!ln || ln.startsWith('#') || ln.startsWith('//')) return;
       // Accept formats like: o -> -01:05  or  outro: -00:45  or next=47:00
-      const m = ln.match(/^(o|outro|next|nextepisode)\s*(?:->|:|=)?\s*([^#;]+)/i);
+      // Order longer tokens first so "outro" doesn't get truncated to leading "o"
+      const m = ln.match(/^(outro|nextepisode|next|o)\s*(?:->|:|=)?\s*([^#;]+)/i);
       if (m) {
         const v = parseSignedTime(m[2].trim());
         if (v != null) offset = v;
@@ -1376,11 +2165,14 @@ app.get(/^\/subs\/(.+)$/, (req, res) => {
     if (!SUB_EXTS.has(ext)) return res.status(404).end('unsupported');
     // Convert to WebVTT on the fly from srt/ass/ssa
     try {
+      const prepared = prepareSubtitleUtf8(abs, rel);
+      const subPath = (prepared && prepared.path) || abs;
+      const usedExt = path.extname(subPath).toLowerCase();
       const args = [];
       if (offsetMs) args.push('-itsoffset', String(offsetMs / 1000));
-      if (ext === '.srt' || ext === '.ass' || ext === '.ssa') args.push('-sub_charenc', 'UTF-8');
+      if (usedExt === '.srt' || usedExt === '.ass' || usedExt === '.ssa') args.push('-sub_charenc', 'UTF-8');
       const stream = ffmpeg()
-        .input(abs)
+        .input(subPath)
         .inputOptions(args)
         .outputOptions([])
         .format('webvtt')
@@ -1436,9 +2228,15 @@ app.get('/sub', (req, res) => {
   }
   // Convert to WebVTT on the fly
   try {
+    const prepared = prepareSubtitleUtf8(subPath, relPath);
+    const subInputPath = (prepared && prepared.path) || subPath;
+    const usedExt = path.extname(subInputPath).toLowerCase();
+    const inputOpts = [];
+    if (offsetMs) inputOpts.push('-itsoffset', String(offsetMs/1000));
+    if (usedExt === '.srt' || usedExt === '.ass' || usedExt === '.ssa') inputOpts.push('-sub_charenc', 'UTF-8');
     const stream = ffmpeg()
-      .input(subPath)
-      .inputOptions(offsetMs ? ['-itsoffset', String(offsetMs/1000)] : [])
+      .input(subInputPath)
+      .inputOptions(inputOpts)
       .outputOptions([])
       .format('webvtt')
       .on('error', (err) => {
@@ -1549,17 +2347,28 @@ app.get('/progress/leader', (req, res) => {
     return res.status(500).json({ ok: false });
   }
 });
-
+const lwStart = { r: 217, g: 119, b: 6 };
+const lwEnd = { r: 251, g: 191, b: 36 };
+const prefSpace = '    '
+const logo = createGradient("LocalWatch", lwStart, lwEnd);
+const runAddr1 = createGradient(`http://localhost:${PORT}`, lwStart, lwEnd);
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`LocalWatch server running on http://localhost:${PORT}`);
+  console.log(`╔${"═".repeat(42)}╗`)
+  console.log(`║${" ".repeat(42)}║`)
+  console.log(`║${" ".repeat(16)}${tcol.bold}${logo}${tcol.reset}${" ".repeat(16)}║\n║${" ".repeat(10)}${runAddr1}${" ".repeat(11)}║`);
+  
+
 
   try {
     const nets = os.networkInterfaces();
     for (const name of Object.keys(nets)) {
       for (const net of nets[name]) {
+        const runAddr2 = createGradient(`http://${net.address}:${PORT}`, lwStart, lwEnd);
         // Skip over non-IPv4 and internal (i.e. 127.0.0.1) addresses
         if (net.family === 'IPv4' && !net.internal) {
-          console.log(`  On your network: http://${net.address}:${PORT}`);
+          console.log(`║${" ".repeat(8)}${runAddr2}${prefSpace.repeat(2)}║`);
+          console.log(`║${" ".repeat(42)}║`)
+          console.log(`╚${"═".repeat(42)}╝`)
           break; // Show first non-internal IPv4 address
         }
       }
@@ -1568,5 +2377,9 @@ app.listen(PORT, '0.0.0.0', () => {
     console.error('Could not determine local network address.', e);
   }
 
-  console.log(`Drop videos in: ${path.resolve(VIDEO_DIR)}`);
+  console.log(`${tcol.yellow}Drop videos in media\n   "${path.resolve(VIDEO_DIR)}"`);
+
+  if (SKIPINTRO_AUTOSCAN) {
+    setTimeout(() => { runSkipIntroAutoScan().catch(() => {}); }, Math.max(0, SKIPINTRO_AUTOSCAN_DELAY_MS));
+  }
 });

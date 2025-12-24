@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://cdn.jsdelivr.net" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/plyr@3/dist/plyr.css" />
     <link rel="stylesheet" href="/style.css" />
-    <link rel="icon" type="image/png" href="/LocalWatch.png" />
+    <link rel="icon" type="image/svg+xml" href="/LocalWatch.png" />
   </head>
   <body>
     <header class="topbar">
@@ -48,6 +48,7 @@
 
       <section class="player-pane">
         <div class="player-container">
+          <div class="lw-top-hover-zone"></div>
           <video id="player" playsinline controls></video>
         </div>
         <div class="now-playing">
@@ -73,7 +74,7 @@
                 <input id="sub-x" type="range" min="-50" max="50" step="1" value="0" />
               </label>
               <label>Y Offset
-                <input id="sub-y" type="range" min="-10" max="500" step="1" value="0" />
+                <input id="sub-y" type="range" min="-10" max="50" step="1" value="0" />
               </label>
               <label>Efekt
                 <select id="sub-effect">
@@ -86,6 +87,10 @@
               <label class="switch">
                 <input id="sub-lift-toggle" type="checkbox" />
                 <span>Plyr görünürken yükselt</span>
+              </label>
+              <label class="switch">
+                <input id="sub-fade-toggle" type="checkbox" />
+                <span>Fade in/out efekti</span>
               </label>
               <button id="sub-pos-reset" type="button">Konumu sıfırla</button>
             </div>

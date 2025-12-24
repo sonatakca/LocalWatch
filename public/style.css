@@ -350,6 +350,8 @@ body {
 
 .subs-tools.open, .layout-tools.open { display: flex; }
 
+
+
 /* Caption styling via CSS variables */
 :root {
   --sub-size: 100;          /* percent */
@@ -358,6 +360,8 @@ body {
   --sub-x: 0;               /* percent, left(-)/right(+) */
   --sub-y: 0;               /* percent, up is positive value */
   --sub-lift: 0px;          /* extra px lift when controls visible */
+  --sub-fade-duration: 250ms;
+   --sub-y-fs: 0px;
 }
 /* Apply caption styling in normal, fullscreen, and PiP */
 .plyr .plyr__captions,
@@ -367,12 +371,21 @@ body {
   /* Use bottom anchoring for vertical offset so multi-line vs single-line
      captions stay aligned consistently. Percentages on translateY are relative
      to the element height (varies by number of lines), which caused drift. */
-  bottom: calc(var(--sub-y) * 1% + var(--sub-lift)) !important;
+  bottom: calc(var(--sub-y) * 1% + var(--sub-lift) + var(--sub-y-fs)) !important;
   transform: translateX(calc(var(--sub-x) * 1%)) !important;
   /* Restore smooth vertical motion like Plyr's default transform animation */
-  transition: bottom .4s ease-in-out, transform .4s ease-in-out !important;
+  transition: bottom .15s ease-in-out, transform .4s ease-in-out !important;
   will-change: bottom, transform;
 }
+
+/* Fullscreen (browser pseudo-class) */
+.plyr:fullscreen {
+  --sub-y-fs: 4vh;
+}
+
+
+
+
 .plyr .plyr__caption,
 .player-container .plyr__caption,
 .plyr--fullscreen .plyr__caption {
@@ -380,6 +393,14 @@ body {
   border-radius: 6px !important;
   padding: 2px 6px !important;
   text-shadow: var(--sub-shadow) !important;
+}
+.lw-sub-fade .plyr__captions,
+.lw-sub-fade .plyr__caption,
+.lw-sub-fade .player-container .plyr__captions,
+.lw-sub-fade .player-container .plyr__caption,
+.lw-sub-fade .plyr--fullscreen .plyr__captions {
+  transition: opacity var(--sub-fade-duration) ease-in-out;
+  will-change: opacity;
 }
 
 .hint { color: var(--muted); padding: 16px; }
@@ -390,9 +411,8 @@ body {
 }
 .plyr__controls {
   /* Apple-like frosted glass look */
-  background: rgba(255,255,255,0.08) !important;               /* translucent tint */
-  -webkit-backdrop-filter: saturate(180%) blur(4px);           /* iOS/Safari */
-  backdrop-filter: saturate(180%) blur(4px);
+  background: rgba(0,0,0,0.1) !important;               /* translucent tint */
+ 
   border: 1px solid rgba(255,255,255,0.18 );                     /* subtle edge */
   box-shadow: 0 10px 30px rgba(0,0,0,0.30),                     /* soft drop */
               inset 0 1px 0 rgba(255,255,255,0.05);             /* inner highlight */
@@ -449,8 +469,8 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 /* Skip Intro / Next Episode overlay */
 .lt-skip-intro, .lt-next-episode {
   position: absolute;
-  right: 16px;
-  bottom: 100px;
+  right: 5vw;
+  top: 2vh;
   z-index: 3; /* above controls */
   pointer-events: none;
 }
@@ -474,6 +494,12 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   overflow: hidden;
   isolation: isolate; /* ensure pseudo-element sits beneath text */
 }
+
+.plyr:fullscreen .lt-next-episode, .plyr:fullscreen .lt-skip-intro {
+  top: 6vh;
+}
+
+
 .lt-skip-intro.show .btn, .lt-next-episode.show .btn { opacity: 1; transform: translateY(0); }
 .lt-skip-intro .btn:hover, .lt-next-episode .btn:hover { background: rgba(50,50,50,0.85); border-color: rgba(255,255,255,0.28); scale: 1.08;-webkit-backdrop-filter: blur(100px); transition: all ease 200ms; }
 .plyr--fullscreen .lt-skip-intro, .plyr--fullscreen .lt-next-episode { right: 24px; top: 24px; }
@@ -671,6 +697,12 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   width: 28px !important;
   height: 28px !important;
 }
+
+/* Disable slide-down; keep fade + hide behavior */
+.plyr--video.plyr--hide-controls .plyr__controls {
+  transform: none !important;
+  transition: opacity .25s ease-in-out;
+}
 /* Compensate padding so the hovered white pill matches other buttons' width */
 .plyr--full-ui .plyr__controls .plyr__control[data-plyr="fullscreen"] {
   /* Make overall button background match others (~38x32) */
@@ -681,15 +713,27 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 .lw-ep-ctrl .ep-btn.prev {
   position: absolute; left: 25%; top: 50%;
   transform: translate(-50%, -50%);
+  opacity: 0.4;
+  transition: 0.4s ease;
   /* Shift left icon slightly right to balance the leading bar */
   /* --icon-shift-x: 2px; */
 }
+
+.lw-ep-ctrl .ep-btn.prev:hover {
+  opacity: 1;
+}
+
 .ep-btn.prev svg {
   width: 50px; height: 50px;
 }
 .lw-ep-ctrl .ep-btn.playpause {
   position: absolute; left: 50%; top: 50%;
   transform: translate(-95%, -100%);
+  opacity: 0.4;
+  transition: 0.4s ease;
+}
+.lw-ep-ctrl .ep-btn.playpause:hover {
+  opacity: 1;
 }
 .ep-btn.playpause svg {
   width: 150px; height: 150px;
@@ -697,8 +741,14 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
 .lw-ep-ctrl .ep-btn.next {
   position: absolute; left: 75%; top: 50%;
   transform: translate(-50%, -50%);
+  opacity: 0.4;
+  transition: 0.4s ease;
+
   /* Shift right icon slightly left to balance the trailing bar */
   /* --icon-shift-x: -2px; */
+}
+.lw-ep-ctrl .ep-btn.next:hover {
+  opacity: 1;
 }
 .ep-btn.next svg {
   width: 50px; height: 50px;
@@ -839,84 +889,253 @@ html::-webkit-scrollbar-thumb:hover { background-color: #3a3a3a; }
   margin: 6px 8px;
 }
 
-/* Layout 2: Two rows
-   Row 1: current-time – progress – duration
-   Row 2: rewind – play – fast-forward – mute – volume – captions – pip – airplay – fullscreen */
+/* Layout 2: Two bars
+   Top bar: current-time - progress - duration
+   Bottom bar: rewind - play - fast-forward - mute - volume - captions - pip - airplay - fullscreen */
 .lw-layout-2 .plyr__controls {
+  position: absolute;
+  inset: 0;
+  padding: 0 !important;
+  margin: 0;
+  background: transparent !important;
+  border: 0;
+  box-shadow: none;
+  border-radius: 0 !important;
+  /* -webkit-backdrop-filter: none;
+  backdrop-filter: none; */
+  pointer-events: none;
+}
+.lw-layout-2 .lw-controls-top,
+.lw-layout-2 .lw-controls-bottom {
+  z-index: 20;
+  pointer-events: auto;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px 10px;
+  gap: 1px 1px;
+  /* min-width: 650px; */
+  padding: 2vh 2vw;
+  border-radius: 100px;
+  background: rgba(0,0,0,0.38);
+  -webkit-backdrop-filter: saturate(180%) blur(6px);
+  backdrop-filter: saturate(180%) blur(6px);
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.30),
+              inset 0 1px 0 rgba(255,255,255,0.05);
+  position: absolute;
+  transition: backdrop-filter .25s ease-in-out, -webkit-backdrop-filter .25s ease-in-out;
+  
 }
-.lw-layout-2 .plyr__controls::after {
-  content: "";
-  flex-basis: 100%; /* force a new row after first-row items */
-  order: 15;
+.plyr.lw-layout-2:fullscreen .lw-controls-top {
+  left: 10vw;
+  right: 10vw;
+  transition: all .2s ease;
 }
-.lw-layout-2 .plyr__controls > .plyr__time--current { order: 0; }
-.lw-layout-2 .plyr__controls > .plyr__progress {
+
+ .lw-layout-2 .lw-controls-top{
+  left: 15vw;
+  right: 15vw;
+
+}
+ .lw-layout-2 .lw-controls-bottom{
+  left: 20vw;
+  right: 20vw;
+}
+
+
+
+.lw-layout-2 .lw-controls-top { bottom: 2vh; }
+.lw-layout-2 .lw-controls-bottom { top: 2vh; }
+.plyr--fullscreen.lw-layout-2 .lw-controls-top,
+.plyr--fullscreen .lw-layout-2 .lw-controls-top,
+.plyr--fullscreen-fallback.lw-layout-2 .lw-controls-top,
+.plyr--fullscreen-fallback .lw-layout-2 .lw-controls-top,
+.plyr:fullscreen.lw-layout-2 .lw-controls-top,
+.plyr:fullscreen .lw-layout-2 .lw-controls-top,
+.plyr:-webkit-full-screen.lw-layout-2 .lw-controls-top,
+.plyr:-webkit-full-screen .lw-layout-2 .lw-controls-top { bottom: 6vh; }
+.plyr--fullscreen.lw-layout-2 .lw-controls-bottom,
+.plyr--fullscreen .lw-layout-2 .lw-controls-bottom,
+.plyr--fullscreen-fallback.lw-layout-2 .lw-controls-bottom,
+.plyr--fullscreen-fallback .lw-layout-2 .lw-controls-bottom,
+.plyr:fullscreen.lw-layout-2 .lw-controls-bottom,
+.plyr:fullscreen .lw-layout-2 .lw-controls-bottom,
+.plyr:-webkit-full-screen.lw-layout-2 .lw-controls-bottom,
+.plyr:-webkit-full-screen .lw-layout-2 .lw-controls-bottom { top: 6vh; }
+.lw-layout-2.plyr--hide-controls .lw-controls-top,
+.lw-layout-2.plyr--hide-controls .lw-controls-bottom {
+  -webkit-backdrop-filter: saturate(100%) blur(0px);
+  backdrop-filter: saturate(100%) blur(0px);
+}
+.lw-layout-2 .lw-controls-top > .plyr__time--current { order: 0; }
+.lw-layout-2 .lw-controls-top > .plyr__progress {
   order: 11;
   flex: 1 1 auto;
   min-width: 160px;
 }
-.lw-layout-2 .plyr__controls > .plyr__time--duration { order: 12; }
-/* Second row grouping with spacers */
-.lw-layout-2 .plyr__controls > button[data-plyr="mute"] { order: 20; }
-.lw-layout-2 .plyr__controls > button[data-plyr="captions"] { order: 22; }
-.lw-layout-2 .plyr__controls > button[data-plyr="airplay"] { order: 23; }
+.lw-layout-2 .lw-controls-top > .plyr__time--duration { order: 12; }
+/* Bottom bar grouping with spacers */
+.lw-layout-2 .lw-controls-bottom > button[data-plyr="mute"] { order: 20; }
+.lw-layout-2 .lw-controls-bottom > button[data-plyr="captions"] { order: 22; transform: translateX(-7.5vw)}
+.lw-layout-2 .lw-controls-bottom > button[data-plyr="airplay"] { order: 23; transform: translateX(-7.5vw)}
 
 /* Flexible spacers to center the middle group */
-.plyr__controls > .lw-flex-spacer { display: none; }
-.lw-layout-2 .plyr__controls > .lw-flex-spacer { display: block; flex: 1 1 auto; min-width: 10px; }
-.lw-layout-2 .plyr__controls > .lw-flex-spacer.lw-spacer-left { order: 30; }
+.lw-layout-2 .lw-controls-bottom > .lw-flex-spacer { display: flex; flex: 1 1 auto; min-width: 10px; }
+.lw-layout-2 .lw-controls-bottom > .lw-flex-spacer.lw-spacer-left { order: 30; }
 
-.lw-layout-2 .plyr__controls > button[data-plyr="rewind"] { order: 40; transform: translateX(-100%)}
-.lw-layout-2 .plyr__controls > button[data-plyr="play"] { order: 41; transform: translateX(-100%)}
-.lw-layout-2 .plyr__controls > button[data-plyr="fast-forward"] { order: 42; transform: translateX(-100%)}
+:root { --shift: 7vw; }
 
-.lw-layout-2 .plyr__controls > .lw-flex-spacer.lw-spacer-right { order: 50; }
+.lw-layout-2 .lw-controls-bottom
+  > button[data-plyr="rewind"],
+.lw-layout-2 .lw-controls-bottom
+  > button[data-plyr="play"],
+.lw-layout-2 .lw-controls-bottom
+  > button[data-plyr="fast-forward"] {
+  transform: translateX(calc(-100% - var(--shift)));
+}
+.lw-layout-2 .lw-controls-bottom > button[data-plyr="rewind"] { order: 40; transform: translateX(calc(-100%-var(--shift)))}
+.lw-layout-2 .lw-controls-bottom > button[data-plyr="play"] { order: 41; transform: translateX(calc(-100%-var(--shift)))}
+.lw-layout-2 .lw-controls-bottom > button[data-plyr="fast-forward"] { order: 42; transform: translateX(calc(-100%-var(--shift)))}
 
-.lw-layout-2 .plyr__controls > button[data-plyr="pip"] { order: 60; }
-.lw-layout-2 .plyr__controls > button[data-plyr="fullscreen"] { order: 61; }
+.lw-layout-2 .lw-controls-bottom > .lw-flex-spacer.lw-spacer-right { order: 50; }
 
-/* Show volume slider next to mute (when volume is supported) */
-.lw-layout-2:not(.plyr--no-volume):not(.lw-no-volume) .plyr__controls > .plyr__volume { order: 21; min-width: 100px; display: inline-flex; align-items: center; }
-.lw-layout-2:not(.plyr--no-volume):not(.lw-no-volume) .plyr__controls > .plyr__volume input[type="range"] { display: inline-block; width: 100px; }
-/* On iOS or when volume unsupported, hide the container to avoid gaps */
-/* iOS/no-volume: keep the mute container visible, hide only the slider */
-.lw-layout-2.plyr--no-volume .plyr__controls > .plyr__volume,
-.lw-layout-2.lw-no-volume .plyr__controls > .plyr__volume { order: 21; display: inline-flex; align-items: center; min-width: 0 !important; width: auto; }
-.lw-layout-2.plyr--no-volume .plyr__controls > .plyr__volume input[type="range"],
-.lw-layout-2.lw-no-volume .plyr__controls > .plyr__volume input[type="range"] { display: none !important; width: 0 !important; padding: 0 !important; margin: 0 !important; }
+.lw-layout-2 .lw-controls-bottom > button[data-plyr="pip"] { order: 60; }
+.lw-layout-2 .lw-controls-bottom > button[data-plyr="fullscreen"] { order: 61; }
+
+
 
 /* Layout 3: Compact top row; progress on second row
    Row 1 (left cluster): rewind – play – fast-forward
    Row 1 (right cluster): mute – volume – captions – pip – airplay – fullscreen
    Row 2: current-time – progress – duration */
+
 .lw-layout-3 .plyr__controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 10px;
+  min-width: 650px;
 }
 .lw-layout-3 .plyr__controls::after {
   content: "";
-  flex-basis: 100%; /* break before time/progress/duration row */
-  order: 29;
+  flex-basis: 100%; /* force a new row after first-row items */
+  order: 15;
 }
-.lw-layout-3 .plyr__controls > button[data-plyr="rewind"] { order: 10; }
-.lw-layout-3 .plyr__controls > button[data-plyr="play"] { order: 11; }
-.lw-layout-3 .plyr__controls > button[data-plyr="fast-forward"] { order: 12; }
-/* Push right cluster to the end of row 1 */
-.lw-layout-3 .plyr__controls > button[data-plyr="mute"] { order: 20; margin-left: auto; }
-.lw-layout-3 .plyr__controls > .plyr__volume { order: 21; min-width: 100px; }
+.lw-layout-3 .plyr__controls > .plyr__time--current { order: 0; }
+.lw-layout-3 .plyr__controls > .plyr__progress {
+  order: 11;
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+.lw-layout-3 .plyr__controls > .plyr__time--duration { order: 12; }
+/* Second row grouping with spacers */
+.lw-layout-3 .plyr__controls > button[data-plyr="mute"] { order: 20; }
 .lw-layout-3 .plyr__controls > button[data-plyr="captions"] { order: 22; }
-.lw-layout-3 .plyr__controls > button[data-plyr="pip"] { order: 23; }
-.lw-layout-3 .plyr__controls > button[data-plyr="airplay"] { order: 24; }
-.lw-layout-3 .plyr__controls > button[data-plyr="fullscreen"] { order: 25; }
-.lw-layout-3 .plyr__controls > .plyr__time--current { order: 30; }
-.lw-layout-3 .plyr__controls > .plyr__progress { order: 31; flex: 1 1 auto; min-width: 160px; }
-.lw-layout-3 .plyr__controls > .plyr__time--duration { order: 32; }
+.lw-layout-3 .plyr__controls > button[data-plyr="airplay"] { order: 23; }
 
+/* Flexible spacers to center the middle group */
+.plyr__controls > .lw-flex-spacer { display: none; }
+.lw-layout-3 .plyr__controls > .lw-flex-spacer { display: block; flex: 1 1 auto; min-width: 10px; }
+.lw-layout-3 .plyr__controls > .lw-flex-spacer.lw-spacer-left { order: 30; }
+
+.lw-layout-3 .plyr__controls > button[data-plyr="rewind"] { order: 40; transform: translateX(-100%)}
+.lw-layout-3 .plyr__controls > button[data-plyr="play"] { order: 41; transform: translateX(-100%)}
+.lw-layout-3 .plyr__controls > button[data-plyr="fast-forward"] { order: 42; transform: translateX(-100%)}
+
+.lw-layout-3 .plyr__controls > .lw-flex-spacer.lw-spacer-right { order: 50; }
+
+.lw-layout-3 .plyr__controls > button[data-plyr="pip"] { order: 60; }
+.lw-layout-3 .plyr__controls > button[data-plyr="fullscreen"] { order: 61; }
+
+/* Show volume slider next to mute (when volume is supported) */
+.lw-layout-3:not(.plyr--no-volume):not(.lw-no-volume) .plyr__controls > .plyr__volume { order: 21; min-width: 100px; display: inline-flex; align-items: center; }
+.lw-layout-3:not(.plyr--no-volume):not(.lw-no-volume) .plyr__controls > .plyr__volume input[type="range"] { display: inline-block; width: 100px; }
+/* On iOS or when volume unsupported, hide the container to avoid gaps */
+/* iOS/no-volume: keep the mute container visible, hide only the slider */
+.lw-layout-3.plyr--no-volume .plyr__controls > .plyr__volume,
+.lw-layout-3.lw-no-volume .plyr__controls > .plyr__volume { order: 21; display: inline-flex; align-items: center; min-width: 0 !important; width: auto; }
+.lw-layout-3.plyr--no-volume .plyr__controls > .plyr__volume input[type="range"],
+.lw-layout-3.lw-no-volume .plyr__controls > .plyr__volume input[type="range"] { display: none !important; width: 0 !important; padding: 0 !important; margin: 0 !important; }
 /* Layout 1 class exists for completeness; keep Plyr default ordering */
 .lw-layout-1 .plyr__controls { gap: 6px 10px; }
+
+
+/* 1) Stop Plyr from fading the whole controls layer in layout 2 */
+.lw-layout-2.plyr--video.plyr--hide-controls .plyr__controls {
+  opacity: 1 !important;
+  pointer-events: none; /* you already rely on this */
+}
+
+/* 2) Give YOUR bars the fade + blur together (same start time) */
+.lw-layout-2 .lw-controls-top,
+.lw-layout-2 .lw-controls-bottom {
+  opacity: 1;
+  will-change: opacity, backdrop-filter, -webkit-backdrop-filter;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+
+  transition:
+    opacity .3s ease-in-out,
+    backdrop-filter .7s ease-in-out,
+    -webkit-backdrop-filter .7s ease-in-out;
+}
+
+.lw-layout-2.plyr--hide-controls .lw-controls-top,
+.lw-layout-2.plyr--hide-controls .lw-controls-bottom {
+  opacity: 0;
+  pointer-events: none; /* optional but nice */
+  -webkit-backdrop-filter: saturate(100%) blur(0px);
+  backdrop-filter: saturate(100%) blur(0px);
+}
+
+.lw-top-hover-zone {
+  position: absolute;
+  left: 0; right: 0;
+  top: 0;
+  height: 12vh;            /* "top part" sensitivity: tweak 30–45% */
+  z-index: 2;             /* above video, below controls so clicks still work */
+  pointer-events: auto;
+  background: transparent;
+}
+
+.plyr:fullscreen .lw-top-hover-zone{
+  height: 15vh; 
+}
+
+/* Default state */
+.lw-layout-2 .lw-controls-bottom {        /* TOP bar */
+  opacity: 0;
+  pointer-events: none;
+}
+.lw-layout-2 .lw-controls-top {     /* BOTTOM bar */
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Hover top area => show TOP bar only */
+.player-container:has(.lw-top-hover-zone:hover, .lw-layout-2 .lw-controls-bottom:hover, .lw-layout-2 .lw-controls-bottom:focus-within, .lt-skip-intro.show:hover, .lt-skip-intro.show .btn:hover, .lt-next-episode.show:hover, .lt-next-episode.show .btn:hover) .lw-layout-2 .lw-controls-bottom {
+  opacity: 1;
+  pointer-events: auto;
+}
+.player-container:has(.lw-top-hover-zone:hover, .lw-layout-2 .lw-controls-bottom:hover, .lw-layout-2 .lw-controls-bottom:focus-within, .lt-skip-intro.show:hover, .lt-skip-intro.show .btn:hover, .lt-next-episode.show:hover, .lt-next-episode.show .btn:hover) .lw-layout-2 .lw-controls-top {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* In fullscreen Plyr adds .plyr--fullscreen on the root */
+.plyr--fullscreen .lw-top-hover-zone,
+.plyr--fullscreen-fallback .lw-top-hover-zone {
+  position: absolute;
+  inset: 0 auto auto 0;   /* top area only */
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 35%;
+  z-index: 2;             /* keep below controls so they stay clickable */
+  pointer-events: auto;
+}
+
+.lw-layout-2 .lw-controls-bottom > button[data-plyr="mute"] {
+  margin-left: 0 !important;
+}
+.lw-layout-2 .lw-controls-bottom > .plyr__volume {
+  margin-left: 4px !important;
+}
